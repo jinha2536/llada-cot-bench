@@ -268,11 +268,11 @@ def aggregate_reasoning_stats(analyses: list[ReasoningAnalysis]) -> dict[str, An
         "avg_token_count": np.mean([a.token_count for a in analyses]),
         "avg_step_count": np.mean([a.step_count for a in analyses]),
         "avg_equation_count": np.mean([a.equation_count for a in analyses]),
-        "avg_answer_position": np.mean([a.answer_position_ratio for a in analyses if a.answer_position_ratio]),
+        "avg_answer_position": np.mean([a.answer_position_ratio for a in analyses if a.answer_position_ratio is not None]) if any(a.answer_position_ratio for a in analyses) else None,
         "pct_with_step_markers": np.mean([a.has_step_markers for a in analyses]),
         "pct_with_conclusion": np.mean([a.has_therefore for a in analyses]),
         "total_operations": {
-            op: sum(a.operation_counts[op] for a in analyses)
+            op: sum(a.operation_counts.get(op, 0) for a in analyses)
             for op in ["+", "-", "*", "/", "="]
         },
     }

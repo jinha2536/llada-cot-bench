@@ -186,10 +186,13 @@ class LLaDABenchmark:
                 # Reasoning analysis
                 "char_count": reasoning.char_count,
                 "word_count": reasoning.word_count,
+                "token_count": reasoning.token_count,
                 "step_count": reasoning.step_count,
                 "equation_count": reasoning.equation_count,
                 "answer_position_ratio": reasoning.answer_position_ratio,
                 "has_step_markers": reasoning.has_step_markers,
+                "has_therefore": reasoning.has_therefore,
+                "operation_counts": reasoning.operation_counts,
             }
     
     def _clean_special_tokens(self, text: str) -> str:
@@ -393,8 +396,8 @@ class LLaDABenchmark:
                     equation_count=r["equation_count"],
                     answer_position_ratio=r["answer_position_ratio"],
                     has_step_markers=r["has_step_markers"],
-                    has_therefore=False,  # Not stored per-result
-                    operation_counts={},  # Not stored per-result
+                    has_therefore=r.get("has_therefore", False),
+                    operation_counts=r.get("operation_counts", {}),
                 ))
             
             metrics = compute_metrics(results)
