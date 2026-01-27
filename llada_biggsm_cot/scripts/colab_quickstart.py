@@ -33,6 +33,17 @@ def main():
     print(f"✅ GPU: {torch.cuda.get_device_name(0)}")
     print(f"✅ VRAM: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
     
+    # W&B login
+    try:
+        import wandb
+        if not wandb.api.api_key:
+            print("\n🔑 W&B 로그인이 필요합니다:")
+            wandb.login()
+        print(f"✅ W&B logged in")
+    except Exception as e:
+        print(f"⚠️  W&B login failed: {e}")
+        print("   Continuing without W&B logging...")
+    
     # Import after GPU check
     from llada_cot import LLaDABenchmark, ExperimentConfig
     from llada_cot.config import DatasetConfig, GenerationConfig, TraceConfig
@@ -52,17 +63,19 @@ def main():
         ),
         # Evaluate all methods
         methods=["Zero-CoT", "Complex-CoT", "MARP", "Diff-MARP"],
-        # Trace analysis
+        # Trace analysis (runs for all methods)
         trace=TraceConfig(
             enabled=True,
-            n_examples=2,
-            method="Diff-MARP",
+            n_examples=2,  # Per method, so 2 * 4 = 8 traces total
+            threshold=0.95,
         ),
         # Output
         output_dir=Path("outputs"),
         figures_dir=Path("figures"),
-        # Set to True and configure wandb_project for logging
-        use_wandb=False,
+        # W&B logging
+        use_wandb=True,
+        wandb_project="llada-biggsm-cot",
+        wandb_entity=None,  # None = 자동으로 로그인된 계정 사용
     )
     
     print("\n" + "=" * 50)

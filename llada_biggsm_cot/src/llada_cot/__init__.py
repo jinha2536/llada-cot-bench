@@ -16,7 +16,11 @@ from .trace import (
     TraceMeta,
     TraceStep,
     analyze_answer_stability,
+    compute_fix_order,
+    compute_stability_summary,
     generate_with_trace,
+    plot_answer_stability_stats,
+    plot_average_fix_order_heatmap,
     save_trace_heatmaps,
 )
 
@@ -47,4 +51,8 @@ __all__ = [
     "generate_with_trace",
     "analyze_answer_stability",
     "save_trace_heatmaps",
+    "compute_fix_order",
+    "plot_average_fix_order_heatmap",
+    "plot_answer_stability_stats",
+    "compute_stability_summary",
 ]

@@ -16,12 +16,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from .config import ExperimentConfig, GenerationConfig
 from .evaluation import compute_metrics, extract_hash_answer, is_correct
 from .prompts import build_prompt
-from .trace import (
-    GenerationTrace,
-    analyze_answer_stability,
-    generate_with_trace,
-    save_trace_heatmaps,
-)
+from .trace import generate_with_trace
 
 logger = logging.getLogger(__name__)
 
@@ -166,128 +161,151 @@ class LLaDABenchmark:
             prompt = build_prompt(method, question)
             
             gen_text, gen_ids, latency = self.generate(prompt)
-            pred = extract_hash_answer(gen_text)
+            
+            # Clean special tokens from generated text
+            gen_text_clean = self._clean_special_tokens(gen_text)
+            pred = extract_hash_answer(gen_text_clean)
             correct = is_correct(pred, gold)
             
             yield {
                 "method": method,
                 "example_idx": i,
                 "dataset_idx": example.get("index", i),
+                "question": question,  # Original question text
                 "gold": gold,
                 "pred": pred,
                 "correct": correct,
                 "latency_sec": latency,
-                "gen_text": gen_text,
+                "gen_text": gen_text_clean,
             }
     
-    def run_traces(self, dataset: Dataset) -> list[dict]:
-        """Run trace analysis on selected examples."""
-        trace_config = self.config.trace
-        if not trace_config.enabled or trace_config.n_examples <= 0:
-            return []
-        
-        logger.info(
-            f"Running trace analysis: {trace_config.n_examples} examples, "
-            f"method={trace_config.method}"
+    def _clean_special_tokens(self, text: str) -> str:
+        """Remove special tokens from generated text."""
+        import re
+        # Common special tokens pattern
+        patterns = [
+            r"<\|.*?\|>",  # <|endoftext|>, <|eot_id|>, etc.
+            r"</?s>",      # <s>, </s>
+            r"\[/?INST\]", # [INST], [/INST]
+        ]
+        for pattern in patterns:
+            text = re.sub(pattern, "", text)
+        return text.strip()
+    
+    def run_traces(self, dataset: Dataset) -> dict[str, list]:
+        """Run trace analysis on selected examples for all methods."""
+        from .trace import (
+            analyze_answer_stability,
+            generate_with_trace,
+            plot_average_fix_order_heatmap,
+            plot_answer_stability_stats,
+            compute_stability_summary,
         )
         
-        trace_results = []
+        trace_config = self.config.trace
+        if not trace_config.enabled or trace_config.n_examples <= 0:
+            return {}
         
-        for i in range(min(trace_config.n_examples, len(dataset))):
-            example = dataset[i]
-            question = example["question"]
-            gold = extract_hash_answer(example["answer"])
-            prompt = build_prompt(trace_config.method, question)
-            input_ids = self._apply_chat_template(prompt)
+        logger.info(
+            f"Running trace analysis: {trace_config.n_examples} examples per method"
+        )
+        
+        traces_by_method: dict[str, list] = {m: [] for m in self.config.methods}
+        stability_by_method: dict[str, list] = {m: [] for m in self.config.methods}
+        
+        for method in self.config.methods:
+            logger.info(f"Tracing method: {method}")
             
-            try:
-                final_seq, trace = generate_with_trace(
-                    model=self.model,
-                    tokenizer=self.tokenizer,
-                    input_ids=input_ids,
-                    gen_length=self.config.generation.gen_length,
-                    block_length=self.config.generation.block_length,
-                    steps=self.config.generation.steps,
-                    temperature=self.config.generation.temperature,
-                    threshold=trace_config.threshold,
-                    eos_early_stop=self.config.generation.eos_early_stop,
-                )
-            except Exception as e:
-                logger.warning(f"Trace failed for example {i}: {e}")
-                continue
-            
-            # Decode final output
-            prompt_len = input_ids.shape[-1]
-            gen_ids = final_seq[0, prompt_len:].detach().cpu().tolist()
-            final_text = self.tokenizer.decode(gen_ids, skip_special_tokens=True)
-            final_pred = extract_hash_answer(final_text)
-            
-            stability = analyze_answer_stability(trace)
-            
-            # Save trace JSON
-            trace_path = (
-                self.config.output_dir
-                / f"trace_{trace_config.method}_ex{i}.json"
-            )
-            with open(trace_path, "w") as f:
-                json.dump(
-                    {
-                        "method": trace_config.method,
-                        "example_idx": i,
-                        "gold": gold,
-                        "final_pred": final_pred,
-                        "stability": {
-                            "final_answer": stability.final_answer,
-                            "first_seen_step": stability.first_seen_step,
-                            "first_stable_step": stability.first_stable_step,
-                        },
-                        "trace": trace.to_dict(),
-                    },
-                    f,
-                    ensure_ascii=False,
-                    indent=2,
-                )
-            
-            # Save heatmaps
-            if trace_config.save_heatmaps:
-                title = (
-                    f"{trace_config.method} ex{i} | "
-                    f"gold={gold} pred={final_pred} | "
+            for i in range(min(trace_config.n_examples, len(dataset))):
+                example = dataset[i]
+                question = example["question"]
+                gold = extract_hash_answer(example["answer"])
+                prompt = build_prompt(method, question)
+                input_ids = self._apply_chat_template(prompt)
+                
+                try:
+                    final_seq, trace = generate_with_trace(
+                        model=self.model,
+                        tokenizer=self.tokenizer,
+                        input_ids=input_ids,
+                        gen_length=self.config.generation.gen_length,
+                        block_length=self.config.generation.block_length,
+                        steps=self.config.generation.steps,
+                        temperature=self.config.generation.temperature,
+                        threshold=trace_config.threshold,
+                        eos_early_stop=self.config.generation.eos_early_stop,
+                    )
+                except Exception as e:
+                    logger.warning(f"Trace failed for {method} example {i}: {e}")
+                    continue
+                
+                traces_by_method[method].append(trace)
+                
+                # Analyze stability
+                stability = analyze_answer_stability(trace)
+                stability_by_method[method].append(stability)
+                
+                # Decode final output
+                prompt_len = input_ids.shape[-1]
+                gen_ids = final_seq[0, prompt_len:].detach().cpu().tolist()
+                final_text = self.tokenizer.decode(gen_ids, skip_special_tokens=True)
+                final_pred = extract_hash_answer(self._clean_special_tokens(final_text))
+                
+                logger.info(
+                    f"  [{method} ex{i}] gold={gold} pred={final_pred} "
                     f"first_seen={stability.first_seen_step} "
                     f"stable={stability.first_stable_step}"
                 )
-                fixed_path, transfer_path = save_trace_heatmaps(
-                    trace,
-                    self.config.figures_dir,
-                    prefix=f"{trace_config.method}_ex{i}_",
-                    title_suffix=title,
-                )
-                
-                # Log to wandb
-                if self._wandb:
-                    self._wandb.log({
-                        f"trace/{trace_config.method}/fixed_ex{i}": 
-                            self._wandb.Image(str(fixed_path)),
-                        f"trace/{trace_config.method}/transfer_ex{i}": 
-                            self._wandb.Image(str(transfer_path)),
-                    })
-            
-            logger.info(
-                f"[trace ex{i}] gold={gold} pred={final_pred} "
-                f"first_seen={stability.first_seen_step} "
-                f"stable={stability.first_stable_step}"
-            )
-            
-            trace_results.append({
-                "example_idx": i,
-                "gold": gold,
-                "pred": final_pred,
-                "correct": is_correct(final_pred, gold),
-                "first_seen_step": stability.first_seen_step,
-                "first_stable_step": stability.first_stable_step,
-            })
         
-        return trace_results
+        # Generate aggregate visualizations
+        if any(traces_by_method.values()):
+            # 1. Average fix order heatmap
+            heatmap_path = plot_average_fix_order_heatmap(
+                traces_by_method,
+                self.config.figures_dir / "avg_fix_order_heatmap.png",
+            )
+            logger.info(f"Saved: {heatmap_path}")
+            
+            # 2. Answer stability boxplot
+            stability_path = plot_answer_stability_stats(
+                stability_by_method,
+                self.config.figures_dir / "answer_stability_stats.png",
+            )
+            logger.info(f"Saved: {stability_path}")
+            
+            # 3. Compute and save stability summary
+            stability_summary = compute_stability_summary(stability_by_method)
+            summary_path = self.config.output_dir / "stability_summary.json"
+            with open(summary_path, "w") as f:
+                json.dump(stability_summary, f, indent=2)
+            logger.info(f"Saved: {summary_path}")
+            
+            # Log to wandb
+            if self._wandb:
+                self._wandb.log({
+                    "trace/avg_fix_order_heatmap": self._wandb.Image(str(heatmap_path)),
+                    "trace/answer_stability_stats": self._wandb.Image(str(stability_path)),
+                })
+                
+                # Log stability summary as table
+                stab_rows = []
+                for method, stats in stability_summary.items():
+                    stab_rows.append({
+                        "method": method,
+                        "mean_first_seen": stats.get("mean_first_seen"),
+                        "mean_first_stable": stats.get("mean_first_stable"),
+                        "stability_rate": stats.get("stability_rate"),
+                    })
+                self._wandb.log({
+                    "trace/stability_summary": self._wandb.Table(
+                        dataframe=pd.DataFrame(stab_rows)
+                    )
+                })
+        
+        return {
+            "traces": traces_by_method,
+            "stability": stability_by_method,
+        }
     
     def run(self) -> pd.DataFrame:
         """
@@ -349,12 +367,44 @@ class LLaDABenchmark:
         logger.info(f"Saved predictions: {pred_path}")
         logger.info(f"Saved summary: {summary_path}")
         
+        # Log to wandb
+        if self._wandb:
+            # Summary table
+            self._wandb.log({"summary_table": self._wandb.Table(dataframe=summary)})
+            
+            # Detailed predictions table (truncate gen_text for readability)
+            predictions_df = df[["method", "example_idx", "question", "gold", "pred", "correct", "gen_text"]].copy()
+            predictions_df["gen_text"] = predictions_df["gen_text"].apply(
+                lambda x: x[:500] + "..." if len(x) > 500 else x
+            )
+            self._wandb.log({
+                "predictions_table": self._wandb.Table(dataframe=predictions_df)
+            })
+            
+            # Accuracy bar chart
+            import matplotlib.pyplot as plt
+            fig, ax = plt.subplots(figsize=(10, 6))
+            colors = ['#4CAF50', '#2196F3', '#FF9800', '#9C27B0']
+            bars = ax.bar(summary["method"], summary["accuracy"], color=colors[:len(summary)])
+            ax.set_ylabel("Accuracy")
+            ax.set_title("Accuracy by CoT Method")
+            ax.set_ylim(0, 1)
+            for bar, acc in zip(bars, summary["accuracy"]):
+                ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.02, 
+                       f'{acc:.2f}', ha='center', va='bottom', fontsize=12)
+            plt.tight_layout()
+            
+            acc_chart_path = self.config.figures_dir / "accuracy_by_method.png"
+            plt.savefig(acc_chart_path, dpi=150)
+            plt.close()
+            
+            self._wandb.log({"accuracy_chart": self._wandb.Image(str(acc_chart_path))})
+        
         # Run trace analysis
         self.run_traces(dataset)
         
-        # Log final results to wandb
+        # Finish wandb
         if self._wandb:
-            self._wandb.log({"summary_table": self._wandb.Table(dataframe=summary)})
             self._wandb.finish()
         
         return summary

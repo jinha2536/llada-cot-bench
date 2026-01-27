@@ -446,3 +446,172 @@ def save_trace_heatmaps(
     plt.close()
     
     return fixed_path, transfer_path
+
+
+def compute_fix_order(trace: GenerationTrace) -> np.ndarray:
+    """
+    Compute the step at which each position was fixed.
+    
+    Returns:
+        Array of shape (gen_length,) with step index when each position was fixed.
+        -1 if never fixed.
+    """
+    gen_length = trace.meta.gen_length
+    fix_step = np.full(gen_length, -1, dtype=np.int32)
+    
+    for step in trace.steps:
+        for pos, transferred in enumerate(step.transfer_map):
+            if transferred == 1 and fix_step[pos] == -1:
+                fix_step[pos] = step.global_step
+    
+    return fix_step
+
+
+def plot_average_fix_order_heatmap(
+    traces_by_method: dict[str, list[GenerationTrace]],
+    output_path: Path,
+    max_positions: int = 100,
+) -> Path:
+    """
+    Plot heatmap showing average fix order by method and position.
+    
+    Args:
+        traces_by_method: Dict mapping method name to list of traces.
+        output_path: Path to save the figure.
+        max_positions: Maximum positions to show (truncate for readability).
+        
+    Returns:
+        Path to saved figure.
+    """
+    import matplotlib.pyplot as plt
+    
+    methods = list(traces_by_method.keys())
+    
+    # Compute average fix order for each method
+    avg_fix_orders = []
+    for method in methods:
+        traces = traces_by_method[method]
+        if not traces:
+            continue
+        
+        # Stack fix orders, handle different lengths
+        fix_orders = [compute_fix_order(t) for t in traces]
+        max_len = min(max_positions, max(len(fo) for fo in fix_orders))
+        
+        # Pad/truncate to same length
+        padded = []
+        for fo in fix_orders:
+            if len(fo) >= max_len:
+                padded.append(fo[:max_len])
+            else:
+                padded.append(np.pad(fo, (0, max_len - len(fo)), constant_values=-1))
+        
+        stacked = np.array(padded, dtype=np.float32)
+        stacked[stacked == -1] = np.nan  # Treat unfixed as NaN
+        avg = np.nanmean(stacked, axis=0)
+        avg_fix_orders.append(avg)
+    
+    data = np.array(avg_fix_orders)
+    
+    # Plot
+    fig, ax = plt.subplots(figsize=(14, max(3, len(methods) * 0.8)))
+    im = ax.imshow(data, aspect="auto", cmap="viridis_r")  # Reverse: early=yellow, late=purple
+    
+    ax.set_yticks(range(len(methods)))
+    ax.set_yticklabels(methods)
+    ax.set_xlabel("Token Position")
+    ax.set_ylabel("Method")
+    ax.set_title("Average Fix Step by Position (lower = fixed earlier)")
+    
+    cbar = plt.colorbar(im, ax=ax)
+    cbar.set_label("Avg. Fix Step")
+    
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150)
+    plt.close()
+    
+    return output_path
+
+
+def plot_answer_stability_stats(
+    stability_by_method: dict[str, list[AnswerStability]],
+    output_path: Path,
+) -> Path:
+    """
+    Plot answer stability statistics by method.
+    
+    Args:
+        stability_by_method: Dict mapping method to list of AnswerStability.
+        output_path: Path to save the figure.
+        
+    Returns:
+        Path to saved figure.
+    """
+    import matplotlib.pyplot as plt
+    
+    methods = list(stability_by_method.keys())
+    
+    # Prepare data
+    first_seen_data = []
+    first_stable_data = []
+    
+    for method in methods:
+        stabs = stability_by_method[method]
+        seen = [s.first_seen_step for s in stabs if s.first_seen_step is not None]
+        stable = [s.first_stable_step for s in stabs if s.first_stable_step is not None]
+        first_seen_data.append(seen)
+        first_stable_data.append(stable)
+    
+    # Create figure with two subplots
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    
+    # First seen boxplot
+    ax1 = axes[0]
+    bp1 = ax1.boxplot(first_seen_data, labels=methods, patch_artist=True)
+    for patch in bp1['boxes']:
+        patch.set_facecolor('lightblue')
+    ax1.set_ylabel("Step")
+    ax1.set_title("Answer First Seen (lower = appears earlier)")
+    ax1.tick_params(axis='x', rotation=15)
+    
+    # First stable boxplot
+    ax2 = axes[1]
+    bp2 = ax2.boxplot(first_stable_data, labels=methods, patch_artist=True)
+    for patch in bp2['boxes']:
+        patch.set_facecolor('lightgreen')
+    ax2.set_ylabel("Step")
+    ax2.set_title("Answer First Stable (lower = stabilizes earlier)")
+    ax2.tick_params(axis='x', rotation=15)
+    
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150)
+    plt.close()
+    
+    return output_path
+
+
+def compute_stability_summary(
+    stability_by_method: dict[str, list[AnswerStability]]
+) -> dict[str, dict[str, float]]:
+    """
+    Compute summary statistics for answer stability.
+    
+    Returns:
+        Dict with method -> {mean_first_seen, mean_first_stable, stability_rate}
+    """
+    summary = {}
+    
+    for method, stabs in stability_by_method.items():
+        seen = [s.first_seen_step for s in stabs if s.first_seen_step is not None]
+        stable = [s.first_stable_step for s in stabs if s.first_stable_step is not None]
+        
+        summary[method] = {
+            "mean_first_seen": np.mean(seen) if seen else None,
+            "std_first_seen": np.std(seen) if seen else None,
+            "mean_first_stable": np.mean(stable) if stable else None,
+            "std_first_stable": np.std(stable) if stable else None,
+            "stability_rate": len(stable) / len(stabs) if stabs else 0,
+            "n_samples": len(stabs),
+        }
+    
+    return summary
