@@ -155,6 +155,8 @@ class LLaDABenchmark:
         
         Yields result dicts for each example.
         """
+        from .analysis import analyze_reasoning
+        
         for i, example in enumerate(tqdm(dataset, desc=method)):
             question = example["question"]
             gold = extract_hash_answer(example["answer"])
@@ -167,16 +169,27 @@ class LLaDABenchmark:
             pred = extract_hash_answer(gen_text_clean)
             correct = is_correct(pred, gold)
             
+            # Analyze reasoning path
+            reasoning = analyze_reasoning(gen_text_clean, gen_ids)
+            
             yield {
                 "method": method,
                 "example_idx": i,
                 "dataset_idx": example.get("index", i),
                 "question": question,  # Original question text
+                "prompt": prompt,  # Full prompt sent to model
                 "gold": gold,
                 "pred": pred,
                 "correct": correct,
                 "latency_sec": latency,
                 "gen_text": gen_text_clean,
+                # Reasoning analysis
+                "char_count": reasoning.char_count,
+                "word_count": reasoning.word_count,
+                "step_count": reasoning.step_count,
+                "equation_count": reasoning.equation_count,
+                "answer_position_ratio": reasoning.answer_position_ratio,
+                "has_step_markers": reasoning.has_step_markers,
             }
     
     def _clean_special_tokens(self, text: str) -> str:
@@ -201,6 +214,7 @@ class LLaDABenchmark:
             plot_answer_stability_stats,
             compute_stability_summary,
         )
+        from .analysis import analyze_digit_fix_order, aggregate_digit_fix_stats
         
         trace_config = self.config.trace
         if not trace_config.enabled or trace_config.n_examples <= 0:
@@ -212,6 +226,7 @@ class LLaDABenchmark:
         
         traces_by_method: dict[str, list] = {m: [] for m in self.config.methods}
         stability_by_method: dict[str, list] = {m: [] for m in self.config.methods}
+        digit_fix_by_method: dict[str, list] = {m: [] for m in self.config.methods}
         
         for method in self.config.methods:
             logger.info(f"Tracing method: {method}")
@@ -249,7 +264,20 @@ class LLaDABenchmark:
                 prompt_len = input_ids.shape[-1]
                 gen_ids = final_seq[0, prompt_len:].detach().cpu().tolist()
                 final_text = self.tokenizer.decode(gen_ids, skip_special_tokens=True)
-                final_pred = extract_hash_answer(self._clean_special_tokens(final_text))
+                final_text_clean = self._clean_special_tokens(final_text)
+                final_pred = extract_hash_answer(final_text_clean)
+                
+                # Analyze digit fix order
+                digit_fix = analyze_digit_fix_order(
+                    trace, self.tokenizer, gen_ids, final_pred
+                )
+                if digit_fix:
+                    digit_fix_by_method[method].append(digit_fix)
+                    logger.info(
+                        f"  [{method} ex{i}] answer={final_pred} "
+                        f"fix_order={digit_fix.fix_order} "
+                        f"steps={digit_fix.digit_fix_steps}"
+                    )
                 
                 logger.info(
                     f"  [{method} ex{i}] gold={gold} pred={final_pred} "
@@ -280,6 +308,16 @@ class LLaDABenchmark:
                 json.dump(stability_summary, f, indent=2)
             logger.info(f"Saved: {summary_path}")
             
+            # 4. Digit fix order summary
+            digit_fix_summary = {
+                method: aggregate_digit_fix_stats(fixes)
+                for method, fixes in digit_fix_by_method.items()
+            }
+            digit_summary_path = self.config.output_dir / "digit_fix_summary.json"
+            with open(digit_summary_path, "w") as f:
+                json.dump(digit_fix_summary, f, indent=2, default=str)
+            logger.info(f"Saved: {digit_summary_path}")
+            
             # Log to wandb
             if self._wandb:
                 self._wandb.log({
@@ -301,10 +339,28 @@ class LLaDABenchmark:
                         dataframe=pd.DataFrame(stab_rows)
                     )
                 })
+                
+                # Log digit fix summary as table
+                digit_rows = []
+                for method, stats in digit_fix_summary.items():
+                    if stats:
+                        digit_rows.append({
+                            "method": method,
+                            "avg_first_digit_step": stats.get("avg_first_digit_step"),
+                            "avg_last_digit_step": stats.get("avg_last_digit_step"),
+                            "fix_order_dist": str(stats.get("fix_order_distribution", {})),
+                        })
+                if digit_rows:
+                    self._wandb.log({
+                        "trace/digit_fix_summary": self._wandb.Table(
+                            dataframe=pd.DataFrame(digit_rows)
+                        )
+                    })
         
         return {
             "traces": traces_by_method,
             "stability": stability_by_method,
+            "digit_fix": digit_fix_by_method,
         }
     
     def run(self) -> pd.DataFrame:
@@ -314,15 +370,32 @@ class LLaDABenchmark:
         Returns:
             Summary DataFrame with results per method.
         """
+        from .analysis import ReasoningAnalysis, aggregate_reasoning_stats
+        
         self.setup()
         dataset = self.load_dataset()
         
         all_results = []
+        reasoning_by_method: dict[str, list[ReasoningAnalysis]] = {m: [] for m in self.config.methods}
         
         # Evaluate each method
         for method in self.config.methods:
             results = list(self.evaluate_method(method, dataset))
             all_results.extend(results)
+            
+            # Collect reasoning analyses
+            for r in results:
+                reasoning_by_method[method].append(ReasoningAnalysis(
+                    char_count=r["char_count"],
+                    word_count=r["word_count"],
+                    token_count=r.get("token_count", r["word_count"]),
+                    step_count=r["step_count"],
+                    equation_count=r["equation_count"],
+                    answer_position_ratio=r["answer_position_ratio"],
+                    has_step_markers=r["has_step_markers"],
+                    has_therefore=False,  # Not stored per-result
+                    operation_counts={},  # Not stored per-result
+                ))
             
             metrics = compute_metrics(results)
             logger.info(
@@ -353,6 +426,9 @@ class LLaDABenchmark:
                 accuracy=("correct", "mean"),
                 parse_rate=("pred", lambda x: x.notna().mean()),
                 avg_latency_sec=("latency_sec", "mean"),
+                avg_word_count=("word_count", "mean"),
+                avg_step_count=("step_count", "mean"),
+                avg_equation_count=("equation_count", "mean"),
             )
             .reset_index()
         )
@@ -364,18 +440,36 @@ class LLaDABenchmark:
         )
         summary.to_csv(summary_path, index=False)
         
+        # Save reasoning stats
+        reasoning_stats = {
+            method: aggregate_reasoning_stats(analyses)
+            for method, analyses in reasoning_by_method.items()
+        }
+        reasoning_path = self.config.output_dir / "reasoning_stats.json"
+        with open(reasoning_path, "w") as f:
+            json.dump(reasoning_stats, f, indent=2, default=float)
+        
         logger.info(f"Saved predictions: {pred_path}")
         logger.info(f"Saved summary: {summary_path}")
+        logger.info(f"Saved reasoning stats: {reasoning_path}")
         
         # Log to wandb
         if self._wandb:
             # Summary table
             self._wandb.log({"summary_table": self._wandb.Table(dataframe=summary)})
             
-            # Detailed predictions table (truncate gen_text for readability)
-            predictions_df = df[["method", "example_idx", "question", "gold", "pred", "correct", "gen_text"]].copy()
+            # Detailed predictions table
+            predictions_df = df[[
+                "method", "example_idx", "question", "prompt", 
+                "gold", "pred", "correct", 
+                "word_count", "step_count", "equation_count",
+                "gen_text"
+            ]].copy()
             predictions_df["gen_text"] = predictions_df["gen_text"].apply(
                 lambda x: x[:500] + "..." if len(x) > 500 else x
+            )
+            predictions_df["prompt"] = predictions_df["prompt"].apply(
+                lambda x: x[:300] + "..." if len(x) > 300 else x
             )
             self._wandb.log({
                 "predictions_table": self._wandb.Table(dataframe=predictions_df)
@@ -399,6 +493,37 @@ class LLaDABenchmark:
             plt.close()
             
             self._wandb.log({"accuracy_chart": self._wandb.Image(str(acc_chart_path))})
+            
+            # Reasoning comparison chart
+            fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+            
+            # Word count by method
+            ax1 = axes[0]
+            ax1.bar(summary["method"], summary["avg_word_count"], color='steelblue')
+            ax1.set_ylabel("Avg Word Count")
+            ax1.set_title("Response Length")
+            ax1.tick_params(axis='x', rotation=15)
+            
+            # Step count by method
+            ax2 = axes[1]
+            ax2.bar(summary["method"], summary["avg_step_count"], color='coral')
+            ax2.set_ylabel("Avg Step Count")
+            ax2.set_title("Reasoning Steps Detected")
+            ax2.tick_params(axis='x', rotation=15)
+            
+            # Equation count by method
+            ax3 = axes[2]
+            ax3.bar(summary["method"], summary["avg_equation_count"], color='seagreen')
+            ax3.set_ylabel("Avg Equation Count")
+            ax3.set_title("Calculations in Response")
+            ax3.tick_params(axis='x', rotation=15)
+            
+            plt.tight_layout()
+            reasoning_chart_path = self.config.figures_dir / "reasoning_comparison.png"
+            plt.savefig(reasoning_chart_path, dpi=150)
+            plt.close()
+            
+            self._wandb.log({"reasoning_chart": self._wandb.Image(str(reasoning_chart_path))})
         
         # Run trace analysis
         self.run_traces(dataset)

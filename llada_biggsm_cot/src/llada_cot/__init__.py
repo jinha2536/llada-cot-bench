@@ -1,5 +1,13 @@
 """LLaDA CoT Benchmark - Chain-of-Thought prompting evaluation for diffusion LMs."""
 
+from .analysis import (
+    DigitFixOrder,
+    ReasoningAnalysis,
+    aggregate_digit_fix_stats,
+    aggregate_reasoning_stats,
+    analyze_digit_fix_order,
+    analyze_reasoning,
+)
 from .benchmark import LLaDABenchmark
 from .config import (
     DatasetConfig,
@@ -55,4 +63,11 @@ __all__ = [
     "plot_average_fix_order_heatmap",
     "plot_answer_stability_stats",
     "compute_stability_summary",
+    # Analysis
+    "ReasoningAnalysis",
+    "DigitFixOrder",
+    "analyze_reasoning",
+    "analyze_digit_fix_order",
+    "aggregate_reasoning_stats",
+    "aggregate_digit_fix_stats",
 ]
