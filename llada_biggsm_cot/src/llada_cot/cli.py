@@ -96,7 +96,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="LightChen2333/BigGSM",
     )
     data_group.add_argument("--split", default="test")
-    data_group.add_argument("--n-eval", type=int, default=60)
+    data_group.add_argument("--n-eval", type=int, default=30)
     data_group.add_argument("--seed", type=int, default=42)
     
     # Method args
@@ -109,10 +109,9 @@ def build_parser() -> argparse.ArgumentParser:
     
     # Trace args
     trace_group = parser.add_argument_group("Trace Analysis")
-    trace_group.add_argument("--trace-n", type=int, default=3)
-    trace_group.add_argument("--trace-method", default="Diff-MARP")
     trace_group.add_argument("--trace-threshold", type=float, default=0.95)
-    trace_group.add_argument("--no-trace", action="store_true")
+    trace_group.add_argument("--no-trace", action="store_true",
+                            help="Disable trace (faster but no detailed analysis)")
     
     # Output args
     parser.add_argument("--output-dir", type=Path, default=Path("outputs"))
@@ -141,8 +140,6 @@ def config_from_args(args: argparse.Namespace) -> ExperimentConfig:
         ),
         trace=TraceConfig(
             enabled=not args.no_trace,
-            n_examples=args.trace_n,
-            method=args.trace_method,
             threshold=args.trace_threshold,
         ),
         dataset=DatasetConfig(

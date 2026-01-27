@@ -152,37 +152,39 @@ def find_answer_token_positions(
     Returns:
         List of (position, digit_char) tuples.
     """
-    if not answer_str:
+    if not answer_str or not gen_ids:
         return []
     
-    # Decode each token individually
-    token_strs = [tokenizer.decode([tid]) for tid in gen_ids]
-    
-    # Find where #### appears
-    full_text = "".join(token_strs)
-    hash_match = re.search(r"####\s*", full_text)
+    # Decode full text to find #### position
+    full_text = tokenizer.decode(gen_ids, skip_special_tokens=True)
+    hash_match = re.search(r"####\s*" + re.escape(answer_str), full_text)
     
     if not hash_match:
-        return []
+        # Try finding just the number after ####
+        hash_match = re.search(r"####\s*([-+]?\d+(?:\.\d+)?)", full_text)
+        if not hash_match:
+            return []
     
-    # Find character position after ####
-    answer_start_char = hash_match.end()
+    # Build character to token position map
+    char_positions = []
+    current_char = 0
     
-    # Map character positions to token positions
-    char_to_token = []
-    char_idx = 0
-    for tok_idx, tok_str in enumerate(token_strs):
+    for tok_idx, tid in enumerate(gen_ids):
+        tok_str = tokenizer.decode([tid], skip_special_tokens=True)
         for _ in tok_str:
-            char_to_token.append(tok_idx)
-            char_idx += 1
+            char_positions.append(tok_idx)
+            current_char += 1
     
-    # Find positions of each digit in the answer
+    # Find where answer digits start in the text
+    answer_start = hash_match.end() - len(answer_str)
+    
+    # Map each digit to its token position
     digit_positions = []
     for i, char in enumerate(answer_str):
-        if char.isdigit() or char in ".-":
-            char_pos = answer_start_char + i
-            if char_pos < len(char_to_token):
-                tok_pos = char_to_token[char_pos]
+        if char.isdigit() or char in ".-+":
+            char_idx = answer_start + i
+            if char_idx < len(char_positions):
+                tok_pos = char_positions[char_idx]
                 digit_positions.append((tok_pos, char))
     
     return digit_positions
@@ -197,19 +199,17 @@ def analyze_digit_fix_order(
     """
     Analyze when each digit of the answer was fixed during generation.
     
-    Args:
-        trace: Generation trace.
-        tokenizer: Tokenizer for decoding.
-        gen_ids: Generated token IDs.
-        answer_str: The extracted answer string (e.g., "42").
-        
-    Returns:
-        DigitFixOrder analysis or None if answer not found.
+    Uses a text-based approach: check when each digit first appears
+    in the partially decoded sequence (not as mask).
     """
     if not answer_str or not trace.steps:
         return None
     
-    # Find answer digit positions in the generated sequence
+    mask_id = trace.meta.mask_id
+    gen_length = trace.meta.gen_length
+    actual_len = len(gen_ids)
+    
+    # Find token positions for answer digits
     digit_info = find_answer_token_positions(tokenizer, gen_ids, answer_str)
     
     if not digit_info:
@@ -218,14 +218,34 @@ def analyze_digit_fix_order(
     digit_positions = [pos for pos, _ in digit_info]
     digit_chars = [char for _, char in digit_info]
     
-    # Find when each position was fixed
+    # Validate positions are within trace range
+    valid_positions = [p for p in digit_positions if p < gen_length]
+    if not valid_positions:
+        return None
+    
+    # For each digit position, find when it was first fixed
+    # by looking at fixed_map transitions (0 -> 1)
     digit_fix_steps = []
+    
     for pos in digit_positions:
         fix_step = None
+        
+        if pos >= gen_length:
+            # Position outside trace range
+            digit_fix_steps.append(None)
+            continue
+            
+        prev_fixed = 0
+        
         for step in trace.steps:
-            if pos < len(step.transfer_map) and step.transfer_map[pos] == 1:
-                fix_step = step.global_step
-                break
+            if pos < len(step.fixed_map):
+                current_fixed = step.fixed_map[pos]
+                # Detect transition from 0 to 1
+                if prev_fixed == 0 and current_fixed == 1:
+                    fix_step = step.global_step
+                    break
+                prev_fixed = current_fixed
+        
         digit_fix_steps.append(fix_step)
     
     # Determine fix order pattern
@@ -235,17 +255,22 @@ def analyze_digit_fix_order(
         fix_order = "unknown"
     elif len(valid_steps) == 1:
         fix_order = "single_digit"
-    elif all(s == valid_steps[0] for s in valid_steps):
+    elif len(set(valid_steps)) == 1:
+        # All same step
         fix_order = "simultaneous"
     else:
-        # Check if monotonically increasing (left-to-right)
+        # Check ordering
         increasing = all(valid_steps[i] <= valid_steps[i+1] for i in range(len(valid_steps)-1))
+        strictly_increasing = all(valid_steps[i] < valid_steps[i+1] for i in range(len(valid_steps)-1))
         decreasing = all(valid_steps[i] >= valid_steps[i+1] for i in range(len(valid_steps)-1))
+        strictly_decreasing = all(valid_steps[i] > valid_steps[i+1] for i in range(len(valid_steps)-1))
         
-        if increasing and not decreasing:
+        if strictly_increasing:
             fix_order = "left-to-right"
-        elif decreasing and not increasing:
+        elif strictly_decreasing:
             fix_order = "right-to-left"
+        elif increasing or decreasing:
+            fix_order = "mostly-sequential"
         else:
             fix_order = "mixed"
     

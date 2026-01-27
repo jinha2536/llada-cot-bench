@@ -19,7 +19,7 @@ generation:
 dataset:
   dataset_id: "LightChen2333/BigGSM"
   split: "test"
-  n_eval: 60
+  n_eval: 30  # All samples are benchmarked AND traced
   seed: 42
 
 # CoT methods to evaluate
@@ -29,11 +29,9 @@ methods:
   - "MARP"
   - "Diff-MARP"
 
-# Denoising trace analysis
+# Denoising trace analysis (all benchmark samples are traced)
 trace:
   enabled: true
-  n_examples: 3
-  method: "Diff-MARP"
   threshold: 0.95
   save_heatmaps: true
 
@@ -42,6 +40,6 @@ output_dir: "outputs"
 figures_dir: "figures"
 
 # Weights & Biases logging
-use_wandb: false
+use_wandb: true
 wandb_project: "llada2-bigGSM-cot"
-wandb_entity: null  # Your W&B team/username
+wandb_entity: null  # Your W&B team/username (null = default account)

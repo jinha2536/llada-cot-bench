@@ -33,8 +33,6 @@ class TraceConfig:
     """Configuration for denoising trace analysis."""
     
     enabled: bool = True
-    n_examples: int = 3
-    method: str = "Diff-MARP"
     threshold: float = 0.95
     save_heatmaps: bool = True
 
@@ -45,7 +43,7 @@ class DatasetConfig:
     
     dataset_id: str = "LightChen2333/BigGSM"
     split: str = "test"
-    n_eval: int = 60
+    n_eval: int = 30  # All samples are benchmarked AND traced
     seed: int = 42
 
 

@@ -50,9 +50,9 @@ def main():
     
     # Configure experiment
     config = ExperimentConfig(
-        # Use fewer examples for quick test
+        # 30 samples per method, all traced
         dataset=DatasetConfig(
-            n_eval=20,  # Increase to 60+ for full benchmark
+            n_eval=30,
             seed=42,
         ),
         generation=GenerationConfig(
@@ -63,10 +63,9 @@ def main():
         ),
         # Evaluate all methods
         methods=["Zero-CoT", "Complex-CoT", "MARP", "Diff-MARP"],
-        # Trace analysis (runs for all methods)
+        # Trace all benchmark samples (integrated)
         trace=TraceConfig(
             enabled=True,
-            n_examples=2,  # Per method, so 2 * 4 = 8 traces total
             threshold=0.95,
         ),
         # Output
