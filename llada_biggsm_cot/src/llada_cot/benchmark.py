@@ -535,11 +535,11 @@ class LLaDABenchmark:
             logger.warning(f"Failed to log predictions table to W&B: {e}")
         
         # Accuracy bar chart
-        fig, ax = plt.subplots(figsize=(10, 6))
-        colors = ['#4CAF50', '#2196F3', '#FF9800', '#9C27B0']
+        fig, ax = plt.subplots(figsize=(12, 6))
+        colors = ['#808080', '#4CAF50', '#2196F3', '#FF9800', '#9C27B0']  # Gray for Direct baseline
         bars = ax.bar(summary["method"], summary["accuracy"], color=colors[:len(summary)])
         ax.set_ylabel("Accuracy")
-        ax.set_title("Accuracy by CoT Method")
+        ax.set_title("Accuracy by CoT Method (Direct = baseline)")
         ax.set_ylim(0, 1)
         for bar, acc in zip(bars, summary["accuracy"]):
             ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.02,

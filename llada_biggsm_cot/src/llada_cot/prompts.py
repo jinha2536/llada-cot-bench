@@ -6,6 +6,7 @@ from enum import Enum
 class PromptMethod(str, Enum):
     """Available prompting methods."""
     
+    DIRECT = "Direct"  # No CoT, just the question
     ZERO_COT = "Zero-CoT"
     COMPLEX_COT = "Complex-CoT"
     MARP = "MARP"
@@ -16,6 +17,9 @@ class PromptMethod(str, Enum):
 _ANSWER_FORMAT = "\n\nProvide the final answer in the format: #### <number>."
 
 _TEMPLATES: dict[PromptMethod, str] = {
+    PromptMethod.DIRECT: (
+        "Question: {question}{suffix}"
+    ),
     PromptMethod.ZERO_COT: (
         "Question: {question}\n"
         "Let's think step by step:{suffix}"

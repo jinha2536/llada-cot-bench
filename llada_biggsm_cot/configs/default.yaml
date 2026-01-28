@@ -19,11 +19,12 @@ generation:
 dataset:
   dataset_id: "LightChen2333/BigGSM"
   split: "test"
-  n_eval: 100  # All samples are benchmarked AND traced
+  n_eval: 80  # All samples are benchmarked AND traced (5 methods × 80 = 400 total)
   seed: 42
 
-# CoT methods to evaluate
+# CoT methods to evaluate (including Direct baseline)
 methods:
+  - "Direct"
   - "Zero-CoT"
   - "Complex-CoT"
   - "MARP"

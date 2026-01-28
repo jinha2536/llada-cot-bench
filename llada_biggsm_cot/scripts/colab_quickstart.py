@@ -50,9 +50,9 @@ def main():
     
     # Configure experiment
     config = ExperimentConfig(
-        # 100 samples per method, all traced
+        # 80 samples per method, all traced (5 methods × 80 = 400 total)
         dataset=DatasetConfig(
-            n_eval=100,
+            n_eval=80,
             seed=42,
         ),
         generation=GenerationConfig(
@@ -61,8 +61,8 @@ def main():
             block_length=32,
             temperature=0.0,
         ),
-        # Evaluate all methods
-        methods=["Zero-CoT", "Complex-CoT", "MARP", "Diff-MARP"],
+        # Evaluate all methods (including Direct baseline)
+        methods=["Direct", "Zero-CoT", "Complex-CoT", "MARP", "Diff-MARP"],
         # Trace all benchmark samples (integrated)
         trace=TraceConfig(
             enabled=True,

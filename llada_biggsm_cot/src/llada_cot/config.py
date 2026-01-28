@@ -43,7 +43,7 @@ class DatasetConfig:
     
     dataset_id: str = "LightChen2333/BigGSM"
     split: str = "test"
-    n_eval: int = 100  # All samples are benchmarked AND traced
+    n_eval: int = 80  # All samples are benchmarked AND traced
     seed: int = 42
 
 
@@ -59,7 +59,7 @@ class ExperimentConfig:
     
     # Experiment settings
     methods: list[str] = field(
-        default_factory=lambda: ["Zero-CoT", "Complex-CoT", "MARP", "Diff-MARP"]
+        default_factory=lambda: ["Direct", "Zero-CoT", "Complex-CoT", "MARP", "Diff-MARP"]
     )
     output_dir: Path = field(default_factory=lambda: Path("outputs"))
     figures_dir: Path = field(default_factory=lambda: Path("figures"))
