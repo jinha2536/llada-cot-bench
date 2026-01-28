@@ -285,6 +285,10 @@ class LLaDABenchmark:
                     stability_by_method[method].append(stability)
                 if digit_fix is not None:
                     digit_fix_by_method[method].append(digit_fix)
+                    if not digit_fix.analysis_success:
+                        logger.debug(
+                            f"  [{method} ex{i}] digit analysis failed: {digit_fix.failure_reason}"
+                        )
                 
                 # Collect reasoning
                 reasoning_by_method[method].append(ReasoningAnalysis(
@@ -465,7 +469,9 @@ class LLaDABenchmark:
                         "avg_first_digit_step": stats.get("avg_first_digit_step"),
                         "avg_last_digit_step": stats.get("avg_last_digit_step"),
                         "fix_order_dist": str(stats.get("fix_order_distribution", {})),
-                        "n_samples": stats.get("n_samples"),
+                        "n_successful": stats.get("n_successful", 0),
+                        "n_failed": stats.get("n_failed", 0),
+                        "n_total": stats.get("n_total", 0),
                     })
             if digit_rows:
                 self._wandb.log({
@@ -494,10 +500,10 @@ class LLaDABenchmark:
             lambda x: x[:500] + "..." if isinstance(x, str) and len(x) > 500 else x
         )
         predictions_df["prompt"] = predictions_df["prompt"].apply(
-            lambda x: x[:300] + "..." if isinstance(x, str) and len(x) > 300 else x
+            lambda x: x[:500] + "..." if isinstance(x, str) and len(x) > 500 else x
         )
         predictions_df["question"] = predictions_df["question"].apply(
-            lambda x: x[:200] + "..." if isinstance(x, str) and len(x) > 200 else x
+            lambda x: x[:300] + "..." if isinstance(x, str) and len(x) > 300 else x
         )
         
         self._wandb.log({

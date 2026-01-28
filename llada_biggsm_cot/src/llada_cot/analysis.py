@@ -1,12 +1,15 @@
 """Detailed analysis utilities for benchmark results."""
 
 import re
+import logging
 from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 
 from .trace import GenerationTrace, TraceStep
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -39,6 +42,8 @@ class DigitFixOrder:
     digit_positions: list[int]  # Token positions of each digit
     digit_fix_steps: list[int | None]  # Step when each digit was fixed
     fix_order: str  # "left-to-right", "right-to-left", "simultaneous", "mixed"
+    analysis_success: bool  # Whether analysis succeeded
+    failure_reason: str | None  # Why analysis failed (if applicable)
     
     def to_dict(self) -> dict:
         return {
@@ -46,6 +51,8 @@ class DigitFixOrder:
             "digit_positions": self.digit_positions,
             "digit_fix_steps": self.digit_fix_steps,
             "fix_order": self.fix_order,
+            "analysis_success": self.analysis_success,
+            "failure_reason": self.failure_reason,
         }
 
 
@@ -72,7 +79,7 @@ def analyze_reasoning(text: str, token_ids: list[int] | None = None) -> Reasonin
     # Length metrics
     char_count = len(text)
     word_count = len(text.split())
-    token_count = len(token_ids) if token_ids else word_count * 1.3  # Rough estimate
+    token_count = len(token_ids) if token_ids else int(word_count * 1.3)
     
     # Step detection patterns
     step_patterns = [
@@ -145,49 +152,82 @@ def find_answer_token_positions(
     tokenizer,
     gen_ids: list[int],
     answer_str: str,
-) -> list[tuple[int, str]]:
+) -> tuple[list[tuple[int, str]], str | None]:
     """
     Find the token positions corresponding to the answer digits.
     
     Returns:
-        List of (position, digit_char) tuples.
+        Tuple of (list of (position, digit_char) tuples, failure_reason or None)
     """
     if not answer_str or not gen_ids:
-        return []
+        return [], "empty_input"
     
     # Decode full text to find #### position
     full_text = tokenizer.decode(gen_ids, skip_special_tokens=True)
-    hash_match = re.search(r"####\s*" + re.escape(answer_str), full_text)
+    
+    # Try multiple patterns to find the answer
+    patterns = [
+        r"####\s*" + re.escape(answer_str) + r"(?:\s|$|\.)",  # Exact match with boundary
+        r"####\s*" + re.escape(answer_str),                    # Exact match
+        r"####\s*([-+]?\d+(?:[.,]\d+)?)",                       # Any number after ####
+    ]
+    
+    hash_match = None
+    matched_answer = answer_str
+    
+    for pattern in patterns:
+        hash_match = re.search(pattern, full_text)
+        if hash_match:
+            if hash_match.lastindex:  # If there's a group
+                matched_answer = hash_match.group(1).replace(",", "")
+            break
     
     if not hash_match:
-        # Try finding just the number after ####
-        hash_match = re.search(r"####\s*([-+]?\d+(?:\.\d+)?)", full_text)
-        if not hash_match:
-            return []
+        return [], "no_hash_pattern"
     
-    # Build character to token position map
-    char_positions = []
-    current_char = 0
+    # Build character to token position map by decoding each token
+    char_to_token = []
+    cumulative_text = ""
     
     for tok_idx, tid in enumerate(gen_ids):
         tok_str = tokenizer.decode([tid], skip_special_tokens=True)
-        for _ in tok_str:
-            char_positions.append(tok_idx)
-            current_char += 1
+        for char in tok_str:
+            char_to_token.append(tok_idx)
+        cumulative_text += tok_str
     
-    # Find where answer digits start in the text
-    answer_start = hash_match.end() - len(answer_str)
+    # Verify cumulative text matches
+    if len(char_to_token) != len(full_text):
+        # Fallback: try without skip_special_tokens
+        char_to_token = []
+        for tok_idx, tid in enumerate(gen_ids):
+            tok_str = tokenizer.decode([tid], skip_special_tokens=False)
+            # Remove special token markers
+            tok_str = re.sub(r"<\|.*?\|>", "", tok_str)
+            for char in tok_str:
+                char_to_token.append(tok_idx)
+    
+    # Find the start position of the matched answer in the text
+    answer_match = re.search(r"####\s*(" + re.escape(matched_answer) + r")", full_text)
+    if not answer_match:
+        return [], "answer_not_in_text"
+    
+    answer_start_char = answer_match.start(1)
     
     # Map each digit to its token position
     digit_positions = []
-    for i, char in enumerate(answer_str):
+    for i, char in enumerate(matched_answer):
         if char.isdigit() or char in ".-+":
-            char_idx = answer_start + i
-            if char_idx < len(char_positions):
-                tok_pos = char_positions[char_idx]
+            char_idx = answer_start_char + i
+            if char_idx < len(char_to_token):
+                tok_pos = char_to_token[char_idx]
                 digit_positions.append((tok_pos, char))
+            else:
+                return digit_positions, f"char_idx_out_of_range_{char_idx}_vs_{len(char_to_token)}"
     
-    return digit_positions
+    if not digit_positions:
+        return [], "no_digits_found"
+    
+    return digit_positions, None
 
 
 def analyze_digit_fix_order(
@@ -195,33 +235,62 @@ def analyze_digit_fix_order(
     tokenizer,
     gen_ids: list[int],
     answer_str: str,
-) -> DigitFixOrder | None:
+) -> DigitFixOrder:
     """
     Analyze when each digit of the answer was fixed during generation.
     
-    Uses a text-based approach: check when each digit first appears
-    in the partially decoded sequence (not as mask).
+    Always returns a DigitFixOrder, with analysis_success=False if failed.
     """
-    if not answer_str or not trace.steps:
-        return None
+    # Handle edge cases
+    if not answer_str:
+        return DigitFixOrder(
+            answer_str="",
+            digit_positions=[],
+            digit_fix_steps=[],
+            fix_order="unknown",
+            analysis_success=False,
+            failure_reason="no_answer_provided",
+        )
     
-    mask_id = trace.meta.mask_id
+    if not trace.steps:
+        return DigitFixOrder(
+            answer_str=answer_str,
+            digit_positions=[],
+            digit_fix_steps=[],
+            fix_order="unknown",
+            analysis_success=False,
+            failure_reason="no_trace_steps",
+        )
+    
     gen_length = trace.meta.gen_length
-    actual_len = len(gen_ids)
     
     # Find token positions for answer digits
-    digit_info = find_answer_token_positions(tokenizer, gen_ids, answer_str)
+    digit_info, failure_reason = find_answer_token_positions(tokenizer, gen_ids, answer_str)
     
     if not digit_info:
-        return None
+        return DigitFixOrder(
+            answer_str=answer_str,
+            digit_positions=[],
+            digit_fix_steps=[],
+            fix_order="unknown",
+            analysis_success=False,
+            failure_reason=failure_reason or "token_mapping_failed",
+        )
     
     digit_positions = [pos for pos, _ in digit_info]
     digit_chars = [char for _, char in digit_info]
     
     # Validate positions are within trace range
-    valid_positions = [p for p in digit_positions if p < gen_length]
-    if not valid_positions:
-        return None
+    out_of_range = [p for p in digit_positions if p >= gen_length]
+    if out_of_range:
+        return DigitFixOrder(
+            answer_str=answer_str,
+            digit_positions=digit_positions,
+            digit_fix_steps=[],
+            fix_order="unknown",
+            analysis_success=False,
+            failure_reason=f"positions_out_of_range_{out_of_range}_gen_length_{gen_length}",
+        )
     
     # For each digit position, find when it was first fixed
     # by looking at fixed_map transitions (0 -> 1)
@@ -229,12 +298,6 @@ def analyze_digit_fix_order(
     
     for pos in digit_positions:
         fix_step = None
-        
-        if pos >= gen_length:
-            # Position outside trace range
-            digit_fix_steps.append(None)
-            continue
-            
         prev_fixed = 0
         
         for step in trace.steps:
@@ -279,6 +342,8 @@ def analyze_digit_fix_order(
         digit_positions=digit_positions,
         digit_fix_steps=digit_fix_steps,
         fix_order=fix_order,
+        analysis_success=True,
+        failure_reason=None,
     )
 
 
@@ -287,40 +352,68 @@ def aggregate_reasoning_stats(analyses: list[ReasoningAnalysis]) -> dict[str, An
     if not analyses:
         return {}
     
+    valid_positions = [a.answer_position_ratio for a in analyses if a.answer_position_ratio is not None]
+    
     return {
-        "avg_char_count": np.mean([a.char_count for a in analyses]),
-        "avg_word_count": np.mean([a.word_count for a in analyses]),
-        "avg_token_count": np.mean([a.token_count for a in analyses]),
-        "avg_step_count": np.mean([a.step_count for a in analyses]),
-        "avg_equation_count": np.mean([a.equation_count for a in analyses]),
-        "avg_answer_position": np.mean([a.answer_position_ratio for a in analyses if a.answer_position_ratio is not None]) if any(a.answer_position_ratio for a in analyses) else None,
-        "pct_with_step_markers": np.mean([a.has_step_markers for a in analyses]),
-        "pct_with_conclusion": np.mean([a.has_therefore for a in analyses]),
+        "avg_char_count": float(np.mean([a.char_count for a in analyses])),
+        "avg_word_count": float(np.mean([a.word_count for a in analyses])),
+        "avg_token_count": float(np.mean([a.token_count for a in analyses])),
+        "avg_step_count": float(np.mean([a.step_count for a in analyses])),
+        "avg_equation_count": float(np.mean([a.equation_count for a in analyses])),
+        "avg_answer_position": float(np.mean(valid_positions)) if valid_positions else None,
+        "pct_with_step_markers": float(np.mean([a.has_step_markers for a in analyses])),
+        "pct_with_conclusion": float(np.mean([a.has_therefore for a in analyses])),
         "total_operations": {
             op: sum(a.operation_counts.get(op, 0) for a in analyses)
             for op in ["+", "-", "*", "/", "="]
         },
+        "n_samples": len(analyses),
     }
 
 
 def aggregate_digit_fix_stats(digit_analyses: list[DigitFixOrder]) -> dict[str, Any]:
     """Aggregate digit fix order statistics."""
-    valid = [d for d in digit_analyses if d is not None]
-    
-    if not valid:
+    if not digit_analyses:
         return {}
     
+    # Separate successful and failed analyses
+    successful = [d for d in digit_analyses if d.analysis_success]
+    failed = [d for d in digit_analyses if not d.analysis_success]
+    
+    # Count failure reasons
+    failure_reasons = {}
+    for d in failed:
+        reason = d.failure_reason or "unknown"
+        failure_reasons[reason] = failure_reasons.get(reason, 0) + 1
+    
+    if not successful:
+        return {
+            "n_total": len(digit_analyses),
+            "n_successful": 0,
+            "n_failed": len(failed),
+            "failure_reasons": failure_reasons,
+        }
+    
     fix_order_counts = {}
-    for d in valid:
+    for d in successful:
         fix_order_counts[d.fix_order] = fix_order_counts.get(d.fix_order, 0) + 1
     
     # Average steps to fix first vs last digit
-    first_digit_steps = [d.digit_fix_steps[0] for d in valid if d.digit_fix_steps and d.digit_fix_steps[0] is not None]
-    last_digit_steps = [d.digit_fix_steps[-1] for d in valid if d.digit_fix_steps and d.digit_fix_steps[-1] is not None]
+    first_digit_steps = [
+        d.digit_fix_steps[0] for d in successful 
+        if d.digit_fix_steps and d.digit_fix_steps[0] is not None
+    ]
+    last_digit_steps = [
+        d.digit_fix_steps[-1] for d in successful 
+        if d.digit_fix_steps and d.digit_fix_steps[-1] is not None
+    ]
     
     return {
         "fix_order_distribution": fix_order_counts,
-        "avg_first_digit_step": np.mean(first_digit_steps) if first_digit_steps else None,
-        "avg_last_digit_step": np.mean(last_digit_steps) if last_digit_steps else None,
-        "n_samples": len(valid),
+        "avg_first_digit_step": float(np.mean(first_digit_steps)) if first_digit_steps else None,
+        "avg_last_digit_step": float(np.mean(last_digit_steps)) if last_digit_steps else None,
+        "n_total": len(digit_analyses),
+        "n_successful": len(successful),
+        "n_failed": len(failed),
+        "failure_reasons": failure_reasons if failure_reasons else None,
     }

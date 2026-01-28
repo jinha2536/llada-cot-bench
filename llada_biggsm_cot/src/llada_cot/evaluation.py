@@ -4,9 +4,41 @@ import re
 from decimal import Decimal, InvalidOperation
 
 
+def extract_hash_answer_strict(text: str | None) -> str | None:
+    """
+    Extract the answer following the #### marker (STRICT - no fallback).
+    
+    Use this for trace analysis where we need to know exactly when
+    the #### pattern appears.
+    
+    Args:
+        text: The generated text to parse.
+        
+    Returns:
+        The extracted number as a string, or None if #### pattern not found.
+        
+    Examples:
+        >>> extract_hash_answer_strict("The answer is #### 42.")
+        '42'
+        >>> extract_hash_answer_strict("The answer is 42")  # No ####
+        None
+    """
+    if text is None:
+        return None
+    
+    # Only match explicit #### format
+    match = re.search(r"####\s*([-+]?\d+(?:[.,]\d+)?)", text)
+    if match:
+        return match.group(1).replace(",", "")
+    
+    return None
+
+
 def extract_hash_answer(text: str | None) -> str | None:
     """
-    Extract the answer following the #### marker.
+    Extract the answer following the #### marker (with fallback).
+    
+    Use this for final answer extraction where we want to be lenient.
     
     Args:
         text: The generated text to parse.
@@ -19,19 +51,19 @@ def extract_hash_answer(text: str | None) -> str | None:
         '42'
         >>> extract_hash_answer("Therefore, #### -3.14")
         '-3.14'
-        >>> extract_hash_answer("No answer here")  # Returns last number
-        >>> extract_hash_answer(None)
+        >>> extract_hash_answer("No hash but answer is 42")
+        '42'
     """
     if text is None:
         return None
     
     # First try the explicit #### format
-    match = re.search(r"####\s*([-+]?\d+(?:\.\d+)?)", text)
+    match = re.search(r"####\s*([-+]?\d+(?:[.,]\d+)?)", text)
     if match:
-        return match.group(1)
+        return match.group(1).replace(",", "")
     
     # Fallback: extract the last number in the text
-    numbers = re.findall(r"[-+]?\d+(?:\.\d+)?", text.replace(",", ""))
+    numbers = re.findall(r"[-+]?\d+(?:[.,]\d+)?", text.replace(",", ""))
     return numbers[-1] if numbers else None
 
 

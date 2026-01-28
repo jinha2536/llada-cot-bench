@@ -16,7 +16,12 @@ from .config import (
     ModelConfig,
     TraceConfig,
 )
-from .evaluation import compute_metrics, extract_hash_answer, is_correct
+from .evaluation import (
+    compute_metrics,
+    extract_hash_answer,
+    extract_hash_answer_strict,
+    is_correct,
+)
 from .prompts import PromptMethod, build_prompt, get_available_methods
 from .trace import (
     AnswerStability,
@@ -49,6 +54,7 @@ __all__ = [
     "get_available_methods",
     # Evaluation
     "extract_hash_answer",
+    "extract_hash_answer_strict",
     "is_correct",
     "compute_metrics",
     # Trace

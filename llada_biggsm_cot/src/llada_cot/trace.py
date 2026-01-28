@@ -14,7 +14,7 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from .evaluation import extract_hash_answer
+from .evaluation import extract_hash_answer_strict
 
 
 @dataclass
@@ -319,7 +319,7 @@ def generate_with_trace(
             partial_text = decode_with_masks(
                 tokenizer, gen_state.tolist(), mask_id=mask_id, mask_repr="▯"
             )
-            parsed = extract_hash_answer(partial_text)
+            parsed = extract_hash_answer_strict(partial_text)
             
             trace.steps.append(
                 TraceStep(
