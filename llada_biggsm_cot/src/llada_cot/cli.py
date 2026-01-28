@@ -96,7 +96,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="LightChen2333/BigGSM",
     )
     data_group.add_argument("--split", default="test")
-    data_group.add_argument("--n-eval", type=int, default=30)
+    data_group.add_argument("--n-eval", type=int, default=100)
     data_group.add_argument("--seed", type=int, default=42)
     
     # Method args

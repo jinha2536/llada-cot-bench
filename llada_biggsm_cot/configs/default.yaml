@@ -19,7 +19,7 @@ generation:
 dataset:
   dataset_id: "LightChen2333/BigGSM"
   split: "test"
-  n_eval: 30  # All samples are benchmarked AND traced
+  n_eval: 100  # All samples are benchmarked AND traced
   seed: 42
 
 # CoT methods to evaluate

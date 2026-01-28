@@ -50,9 +50,9 @@ def main():
     
     # Configure experiment
     config = ExperimentConfig(
-        # 30 samples per method, all traced
+        # 100 samples per method, all traced
         dataset=DatasetConfig(
-            n_eval=30,
+            n_eval=100,
             seed=42,
         ),
         generation=GenerationConfig(

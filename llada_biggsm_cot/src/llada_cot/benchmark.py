@@ -495,20 +495,44 @@ class LLaDABenchmark:
             "gen_text"
         ]].copy()
         
-        # Truncate long text for display
+        # Clean and truncate text fields for W&B display
+        def clean_for_wandb(text, max_len=500):
+            """Clean text for W&B table display."""
+            if not isinstance(text, str) or not text:
+                return str(text) if text is not None else ""
+            # Replace newlines and tabs with spaces
+            text = text.replace("\n", " ").replace("\t", " ")
+            # Collapse multiple spaces
+            while "  " in text:
+                text = text.replace("  ", " ")
+            text = text.strip()
+            # Truncate
+            if len(text) > max_len:
+                return text[:max_len] + "..."
+            return text
+        
         predictions_df["gen_text"] = predictions_df["gen_text"].apply(
-            lambda x: x[:500] + "..." if isinstance(x, str) and len(x) > 500 else x
+            lambda x: clean_for_wandb(x, 500)
         )
         predictions_df["prompt"] = predictions_df["prompt"].apply(
-            lambda x: x[:500] + "..." if isinstance(x, str) and len(x) > 500 else x
+            lambda x: clean_for_wandb(x, 400)
         )
         predictions_df["question"] = predictions_df["question"].apply(
-            lambda x: x[:300] + "..." if isinstance(x, str) and len(x) > 300 else x
+            lambda x: clean_for_wandb(x, 300)
         )
         
-        self._wandb.log({
-            "predictions_table": self._wandb.Table(dataframe=predictions_df)
-        })
+        # Save as CSV backup (in case W&B upload fails)
+        predictions_csv_path = self.config.output_dir / "predictions_table.csv"
+        predictions_df.to_csv(predictions_csv_path, index=False)
+        logger.info(f"Saved predictions CSV backup: {predictions_csv_path}")
+        
+        # Log to W&B
+        try:
+            self._wandb.log({
+                "predictions_table": self._wandb.Table(dataframe=predictions_df)
+            })
+        except Exception as e:
+            logger.warning(f"Failed to log predictions table to W&B: {e}")
         
         # Accuracy bar chart
         fig, ax = plt.subplots(figsize=(10, 6))

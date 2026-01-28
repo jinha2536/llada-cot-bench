@@ -43,7 +43,7 @@ class DatasetConfig:
     
     dataset_id: str = "LightChen2333/BigGSM"
     split: str = "test"
-    n_eval: int = 30  # All samples are benchmarked AND traced
+    n_eval: int = 100  # All samples are benchmarked AND traced
     seed: int = 42
 
 
