@@ -1,0 +1,37 @@
+# Default configuration for LLaDA CoT Benchmark
+
+dataset:
+  type: biggsm
+  n_eval: 80
+  seed: 42
+  math_levels: [3, 4, 5]
+  countdown_num_count: 4
+
+model:
+  type: llada
+  device_map: auto
+  torch_dtype: auto
+  llada_model_id: "GSAI-ML/LLaDA-2.0-mini-CAP"
+  ling_model_id: "inclusionAI/Ling-lite-1.5"
+
+generation:
+  gen_length: 512
+  block_length: 32
+  steps: 64
+  temperature: 0.0
+  eos_early_stop: true
+
+trace:
+  enabled: true
+  threshold: 0.95
+  save_heatmaps: true
+
+methods:
+  - "Direct"
+  - "Zero-CoT"
+  - "Complex-CoT"
+  - "MARP"
+  - "Diff-MARP"
+
+output_dir: "outputs"
+use_wandb: false
