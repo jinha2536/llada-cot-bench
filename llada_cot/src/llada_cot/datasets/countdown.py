@@ -12,40 +12,32 @@ def load_countdown(
     seed: int,
     num_count: int = 4,
 ) -> Tuple[List[DatasetExample], str]:
-    """Load Countdown dataset.
+    """Load Countdown dataset from Jiayi-Pan/Countdown-Tasks-3to4.
     
     Args:
         n_eval: Number of examples to load
         seed: Random seed for shuffling
-        num_count: Number of starting numbers (3-6)
+        num_count: Number of starting numbers (3 or 4 for this dataset)
         
     Returns:
         Tuple of (list of examples, dataset name)
     """
-    # Select dataset based on number count
-    if num_count <= 4:
-        dataset_name = "Jiayi-Pan/Countdown-Tasks-3to4"
+    # Load dataset - only has train split
+    ds = load_dataset("Jiayi-Pan/Countdown-Tasks-3to4", split="train")
+    
+    # Convert to list for filtering
+    all_examples = list(ds)
+    
+    # Filter by number count if specified
+    if num_count in [3, 4]:
+        filtered = [ex for ex in all_examples if len(ex["nums"]) == num_count]
     else:
-        dataset_name = "Jiayi-Pan/Countdown-Tasks-5to6"
+        filtered = all_examples
     
-    try:
-        ds = load_dataset(dataset_name, split="train")
-    except Exception:
-        # Fallback
-        ds = load_dataset("alexjackson17/countdown-numbers-6-gr", split="train")
-    
-    # Filter by number count
-    filtered = []
-    for ex in ds:
-        nums = ex.get("nums", ex.get("starting", []))
-        if isinstance(nums, str):
-            nums = eval(nums)
-        if len(nums) == num_count:
-            filtered.append(ex)
-    
-    # If filtering removed everything, use all
-    if not filtered:
-        filtered = list(ds)
+    # If filtering removed too many, use all
+    if len(filtered) < n_eval:
+        print(f"Warning: Only {len(filtered)} examples with {num_count} numbers, using all available")
+        filtered = all_examples
     
     # Shuffle and select
     random.seed(seed)
@@ -54,10 +46,8 @@ def load_countdown(
     
     examples = []
     for idx, item in enumerate(selected):
-        nums = item.get("nums", item.get("starting", []))
-        if isinstance(nums, str):
-            nums = eval(nums)
-        target = item.get("target", item.get("closest", 0))
+        nums = item["nums"]  # Already a list
+        target = item["target"]  # Already an int
         
         examples.append(DatasetExample(
             idx=idx,

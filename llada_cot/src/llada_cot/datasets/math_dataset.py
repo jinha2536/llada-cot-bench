@@ -1,4 +1,4 @@
-"""MATH dataset loader."""
+"""MATH500 dataset loader."""
 import re
 import random
 from typing import List, Tuple, Optional
@@ -14,7 +14,7 @@ def load_math(
     levels: List[int] = None,
     subjects: List[str] = None,
 ) -> Tuple[List[DatasetExample], str]:
-    """Load MATH dataset.
+    """Load MATH500 dataset from HuggingFaceH4/MATH-500.
     
     Args:
         n_eval: Number of examples to load
@@ -27,22 +27,28 @@ def load_math(
     """
     levels = levels or [3, 4, 5]
     
-    # Try different MATH dataset sources
-    try:
-        ds = load_dataset("lighteval/MATH", split="test", trust_remote_code=True)
-    except Exception:
-        try:
-            ds = load_dataset("hendrycks/competition_math", split="test")
-        except Exception:
-            ds = load_dataset("EleutherAI/hendrycks_math", "all", split="test")
+    # Load MATH500 dataset
+    ds = load_dataset("HuggingFaceH4/MATH-500", split="test")
     
-    # Filter by level
-    level_strs = [f"Level {l}" for l in levels]
-    filtered = [ex for ex in ds if ex.get("level") in level_strs]
+    # Convert to list for filtering
+    all_examples = list(ds)
+    
+    # Filter by level (level is stored as string like "Level 3" or int)
+    filtered = []
+    for ex in all_examples:
+        level = ex.get("level")
+        # Handle both "Level 3" string format and integer format
+        if isinstance(level, str):
+            level_num = int(level.replace("Level ", "")) if "Level" in level else int(level)
+        else:
+            level_num = int(level)
+        
+        if level_num in levels:
+            filtered.append(ex)
     
     # Filter by subject if specified
     if subjects:
-        filtered = [ex for ex in filtered if ex.get("type") in subjects]
+        filtered = [ex for ex in filtered if ex.get("subject") in subjects]
     
     # Shuffle and select
     random.seed(seed)
@@ -51,7 +57,11 @@ def load_math(
     
     examples = []
     for idx, item in enumerate(selected):
-        gold = _extract_boxed_answer(item.get("solution", ""))
+        # MATH500 has 'answer' field already extracted
+        gold = item.get("answer")
+        if gold is None:
+            # Fallback: extract from solution
+            gold = _extract_boxed_answer(item.get("solution", ""))
         
         examples.append(DatasetExample(
             idx=idx,
@@ -61,7 +71,7 @@ def load_math(
         ))
     
     level_str = ",".join(map(str, levels))
-    name = f"MATH (Level {level_str})"
+    name = f"MATH500 (Level {level_str})"
     print(f"Loaded {len(examples)} examples from {name}")
     return examples, name
 
