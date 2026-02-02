@@ -37,9 +37,9 @@ class ModelConfig:
     torch_dtype: str = "auto"
     trust_remote_code: bool = True
     # LLaDA specific
-    llada_model_id: str = "GSAI-ML/LLaDA-2.0-mini-CAP"
+    llada_model_id: str = "inclusionAI/LLaDA2.0-mini"
     # Ling specific
-    ling_model_id: str = "inclusionAI/Ling-lite-1.5"
+    ling_model_id: str = "inclusionAI/Ling-lite"
     ling_max_new_tokens: int = 512
     ling_temperature: float = 0.0
     ling_do_sample: bool = False

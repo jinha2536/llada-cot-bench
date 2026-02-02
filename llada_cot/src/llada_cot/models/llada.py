@@ -78,13 +78,14 @@ class LLaDAModel:
         
         t0 = time.time()
         
-        # Use model's generate method
+        # Use model's generate method (LLaDA 2.0 API)
         output = self.model.generate(
-            input_ids,
+            inputs=input_ids,
             gen_length=gen_config.gen_length,
             steps=gen_config.steps,
             block_length=gen_config.block_length,
             temperature=gen_config.temperature,
+            eos_early_stop=gen_config.eos_early_stop,
         )
         
         latency = time.time() - t0
