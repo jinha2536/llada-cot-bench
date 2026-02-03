@@ -28,26 +28,15 @@ def _patch_transformers_imports():
 
 
 def _find_and_patch_modeling_file(model_id: str) -> bool:
-    """Find and patch the Ling modeling file in HF cache to add 'default' to ROPE_INIT_FUNCTIONS.
+    """Find and patch the Ling modeling file to add 'default' to ROPE_INIT_FUNCTIONS.
     
-    Returns True if patching was successful or not needed.
+    Called AFTER first load attempt fails, so the file is already downloaded.
+    Returns True if patching was successful.
     """
-    from transformers import AutoConfig
-    
-    # First, load the config to trigger download of custom code to transformers_modules cache
-    try:
-        _ = AutoConfig.from_pretrained(model_id, trust_remote_code=True)
-    except Exception as e:
-        print(f"Warning: Could not load config: {e}")
-        # Continue anyway, maybe the files are already cached
-    
-    # Now find the transformers_modules cache location
-    # Format: ~/.cache/huggingface/modules/transformers_modules/{org}/{repo}/...
+    # Find the transformers_modules cache
     hf_cache_home = os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
-    
-    # Colab sometimes uses /root/.cache
     if not os.path.exists(hf_cache_home):
-        hf_cache_home = os.path.expanduser("/root/.cache/huggingface")
+        hf_cache_home = "/root/.cache/huggingface"
     
     modules_cache = os.path.join(hf_cache_home, "modules", "transformers_modules")
     
@@ -55,94 +44,62 @@ def _find_and_patch_modeling_file(model_id: str) -> bool:
         print(f"Warning: transformers_modules cache not found at {modules_cache}")
         return False
     
-    # The model_id gets transformed: inclusionAI/Ling-mini-2.0 -> inclusionAI/Ling_hyphen_mini_hyphen_2_dot_0
-    org, repo = model_id.split("/")
-    # Transform repo name to match HF's escaping
-    repo_escaped = repo.replace("-", "_hyphen_").replace(".", "_dot_")
-    
-    model_modules_dir = os.path.join(modules_cache, org, repo_escaped)
-    
-    if not os.path.exists(model_modules_dir):
-        # Try without escaping
-        model_modules_dir = os.path.join(modules_cache, org, repo)
-        if not os.path.exists(model_modules_dir):
-            # Try to find it by listing the directory
-            org_dir = os.path.join(modules_cache, org)
-            if os.path.exists(org_dir):
-                for dirname in os.listdir(org_dir):
-                    if repo.replace("-", "_hyphen_") in dirname or repo in dirname:
-                        model_modules_dir = os.path.join(org_dir, dirname)
-                        break
-            
-            if not os.path.exists(model_modules_dir):
-                print(f"Warning: Could not find modules cache for {model_id}")
-                return False
-    
-    # Find the modeling file (could be in a versioned subdirectory)
+    # Find modeling file by walking the cache
     modeling_file = None
-    for root, dirs, files in os.walk(model_modules_dir):
+    for root, dirs, files in os.walk(modules_cache):
         if "modeling_bailing_moe_v2.py" in files:
             modeling_file = os.path.join(root, "modeling_bailing_moe_v2.py")
             break
     
-    if not modeling_file or not os.path.exists(modeling_file):
-        print(f"Warning: modeling_bailing_moe_v2.py not found in {model_modules_dir}")
+    if not modeling_file:
+        print(f"Warning: modeling_bailing_moe_v2.py not found in {modules_cache}")
         return False
     
-    # Read and patch the file
+    print(f"Found modeling file: {modeling_file}")
+    
+    # Read and patch
     try:
         with open(modeling_file, 'r') as f:
             content = f.read()
         
-        # Check if already patched or doesn't need patching
+        # Check if already patched
         if re.search(r'ROPE_INIT_FUNCTIONS\s*=\s*\{[^}]*["\']default["\']', content, re.DOTALL):
-            print("ROPE_INIT_FUNCTIONS already has 'default'")
-            return True  # Already has 'default'
+            print("Already patched")
+            return True
         
-        # Find ROPE_INIT_FUNCTIONS and add 'default'
-        # Pattern: ROPE_INIT_FUNCTIONS = { ... }
-        rope_pattern = r'(ROPE_INIT_FUNCTIONS\s*=\s*\{)'
-        
-        if not re.search(rope_pattern, content):
-            print("Warning: ROPE_INIT_FUNCTIONS not found in modeling file")
-            return False
-        
-        # Find which init function to use as default
-        # Look for existing functions like _compute_llama3_parameters
+        # Find a suitable init function to use as default
         func_match = re.search(r'["\'](llama3|linear|dynamic)["\']:\s*(_compute_\w+_parameters)', content)
         if func_match:
             default_func = func_match.group(2)
         else:
-            # Find any compute_*_parameters function
             func_match = re.search(r'["\'](\w+)["\']:\s*(_compute_\w+_parameters)', content)
             if func_match:
                 default_func = func_match.group(2)
             else:
-                print("Warning: Could not find a suitable rope init function")
+                print("Warning: Could not find a rope init function to use as default")
                 return False
         
-        # Add 'default' entry
+        # Add 'default' entry to ROPE_INIT_FUNCTIONS
         new_content = re.sub(
-            rope_pattern,
+            r'(ROPE_INIT_FUNCTIONS\s*=\s*\{)',
             f'\\1\n    "default": {default_func},',
             content
         )
         
-        # Write back
         with open(modeling_file, 'w') as f:
             f.write(new_content)
         
-        print(f"Patched {modeling_file} to add 'default' to ROPE_INIT_FUNCTIONS")
+        print(f"Patched ROPE_INIT_FUNCTIONS with 'default' -> {default_func}")
         
-        # Clear any cached module imports
-        modules_to_remove = [k for k in list(sys.modules.keys()) if 'bailing_moe' in k.lower()]
-        for mod in modules_to_remove:
-            del sys.modules[mod]
+        # Clear cached modules so the patched file is reloaded
+        for mod_name in list(sys.modules.keys()):
+            if 'bailing_moe' in mod_name.lower():
+                del sys.modules[mod_name]
         
         return True
         
     except Exception as e:
-        print(f"Warning: Could not patch modeling file: {e}")
+        print(f"Warning: Could not patch: {e}")
         import traceback
         traceback.print_exc()
         return False
@@ -177,25 +134,41 @@ class LingModel:
         """Load model and tokenizer."""
         from transformers import AutoModelForCausalLM, AutoTokenizer
         
-        # Apply compatibility patches BEFORE loading
+        # Apply transformers compatibility patch
         _patch_transformers_imports()
-        _find_and_patch_modeling_file(self.model_id)
         
         print(f"Loading {self.model_id}...")
         
-        # Load tokenizer first
+        # Load tokenizer first (doesn't need modeling file)
         self.tokenizer = AutoTokenizer.from_pretrained(
             self.model_id,
             trust_remote_code=self.config.trust_remote_code,
         )
         
-        # Load model - official docs say to use dtype="auto"
-        self.model = AutoModelForCausalLM.from_pretrained(
-            self.model_id,
-            dtype="auto",  # Ling uses 'dtype' not 'torch_dtype'
-            device_map=self.config.device_map,
-            trust_remote_code=self.config.trust_remote_code,
-        ).eval()
+        # Try loading model - may fail with KeyError: 'default' on first attempt
+        try:
+            self.model = AutoModelForCausalLM.from_pretrained(
+                self.model_id,
+                dtype="auto",
+                device_map=self.config.device_map,
+                trust_remote_code=self.config.trust_remote_code,
+            ).eval()
+        except KeyError as e:
+            if "'default'" in str(e) or "default" in str(e):
+                print(f"Caught KeyError: {e}, patching ROPE_INIT_FUNCTIONS...")
+                # Now modeling file is downloaded, patch it
+                if _find_and_patch_modeling_file(self.model_id):
+                    # Retry loading
+                    self.model = AutoModelForCausalLM.from_pretrained(
+                        self.model_id,
+                        dtype="auto",
+                        device_map=self.config.device_map,
+                        trust_remote_code=self.config.trust_remote_code,
+                    ).eval()
+                else:
+                    raise RuntimeError(f"Failed to patch Ling model: {e}")
+            else:
+                raise
         
         # Get device
         try:
