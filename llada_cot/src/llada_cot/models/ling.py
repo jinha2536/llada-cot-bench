@@ -8,15 +8,15 @@ import re
 from ..config import ModelConfig, GenerationConfig
 
 
-def _patch_transformers_imports():
-    """Patch missing imports in transformers for Ling model compatibility.
+def _patch_transformers_for_ling():
+    """Patch transformers library for Ling model compatibility.
     
-    Ling's custom modeling code uses deprecated/removed transformers imports.
-    This adds them back for compatibility.
+    Fixes two issues:
+    1. is_torch_fx_available was removed in newer transformers
+    2. ROPE_INIT_FUNCTIONS doesn't have 'default' key
     """
+    # Fix 1: is_torch_fx_available
     import transformers.utils.import_utils as import_utils
-    
-    # is_torch_fx_available was removed in newer transformers versions
     if not hasattr(import_utils, 'is_torch_fx_available'):
         def is_torch_fx_available():
             try:
@@ -25,84 +25,19 @@ def _patch_transformers_imports():
             except ImportError:
                 return False
         import_utils.is_torch_fx_available = is_torch_fx_available
-
-
-def _find_and_patch_modeling_file(model_id: str) -> bool:
-    """Find and patch the Ling modeling file to add 'default' to ROPE_INIT_FUNCTIONS.
     
-    Called AFTER first load attempt fails, so the file is already downloaded.
-    Returns True if patching was successful.
-    """
-    # Find the transformers_modules cache
-    hf_cache_home = os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
-    if not os.path.exists(hf_cache_home):
-        hf_cache_home = "/root/.cache/huggingface"
-    
-    modules_cache = os.path.join(hf_cache_home, "modules", "transformers_modules")
-    
-    if not os.path.exists(modules_cache):
-        print(f"Warning: transformers_modules cache not found at {modules_cache}")
-        return False
-    
-    # Find modeling file by walking the cache
-    modeling_file = None
-    for root, dirs, files in os.walk(modules_cache):
-        if "modeling_bailing_moe_v2.py" in files:
-            modeling_file = os.path.join(root, "modeling_bailing_moe_v2.py")
-            break
-    
-    if not modeling_file:
-        print(f"Warning: modeling_bailing_moe_v2.py not found in {modules_cache}")
-        return False
-    
-    print(f"Found modeling file: {modeling_file}")
-    
-    # Read and patch
+    # Fix 2: ROPE_INIT_FUNCTIONS missing 'default'
     try:
-        with open(modeling_file, 'r') as f:
-            content = f.read()
-        
-        # Check if already patched
-        if re.search(r'ROPE_INIT_FUNCTIONS\s*=\s*\{[^}]*["\']default["\']', content, re.DOTALL):
-            print("Already patched")
-            return True
-        
-        # Find a suitable init function to use as default
-        func_match = re.search(r'["\'](llama3|linear|dynamic)["\']:\s*(_compute_\w+_parameters)', content)
-        if func_match:
-            default_func = func_match.group(2)
-        else:
-            func_match = re.search(r'["\'](\w+)["\']:\s*(_compute_\w+_parameters)', content)
-            if func_match:
-                default_func = func_match.group(2)
-            else:
-                print("Warning: Could not find a rope init function to use as default")
-                return False
-        
-        # Add 'default' entry to ROPE_INIT_FUNCTIONS
-        new_content = re.sub(
-            r'(ROPE_INIT_FUNCTIONS\s*=\s*\{)',
-            f'\\1\n    "default": {default_func},',
-            content
-        )
-        
-        with open(modeling_file, 'w') as f:
-            f.write(new_content)
-        
-        print(f"Patched ROPE_INIT_FUNCTIONS with 'default' -> {default_func}")
-        
-        # Clear cached modules so the patched file is reloaded
-        for mod_name in list(sys.modules.keys()):
-            if 'bailing_moe' in mod_name.lower():
-                del sys.modules[mod_name]
-        
-        return True
-        
-    except Exception as e:
-        print(f"Warning: Could not patch: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+        from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS
+        if 'default' not in ROPE_INIT_FUNCTIONS:
+            # Use 'llama3' as default if available, otherwise first available
+            if 'llama3' in ROPE_INIT_FUNCTIONS:
+                ROPE_INIT_FUNCTIONS['default'] = ROPE_INIT_FUNCTIONS['llama3']
+            elif len(ROPE_INIT_FUNCTIONS) > 0:
+                ROPE_INIT_FUNCTIONS['default'] = list(ROPE_INIT_FUNCTIONS.values())[0]
+            print(f"Patched ROPE_INIT_FUNCTIONS with 'default' key")
+    except ImportError:
+        pass  # Older transformers version without modeling_rope_utils
 
 
 class LingModel:
@@ -134,41 +69,24 @@ class LingModel:
         """Load model and tokenizer."""
         from transformers import AutoModelForCausalLM, AutoTokenizer
         
-        # Apply transformers compatibility patch
-        _patch_transformers_imports()
+        # Patch transformers BEFORE loading
+        _patch_transformers_for_ling()
         
         print(f"Loading {self.model_id}...")
         
-        # Load tokenizer first (doesn't need modeling file)
+        # Load tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(
             self.model_id,
             trust_remote_code=self.config.trust_remote_code,
         )
         
-        # Try loading model - may fail with KeyError: 'default' on first attempt
-        try:
-            self.model = AutoModelForCausalLM.from_pretrained(
-                self.model_id,
-                dtype="auto",
-                device_map=self.config.device_map,
-                trust_remote_code=self.config.trust_remote_code,
-            ).eval()
-        except KeyError as e:
-            if "'default'" in str(e) or "default" in str(e):
-                print(f"Caught KeyError: {e}, patching ROPE_INIT_FUNCTIONS...")
-                # Now modeling file is downloaded, patch it
-                if _find_and_patch_modeling_file(self.model_id):
-                    # Retry loading
-                    self.model = AutoModelForCausalLM.from_pretrained(
-                        self.model_id,
-                        dtype="auto",
-                        device_map=self.config.device_map,
-                        trust_remote_code=self.config.trust_remote_code,
-                    ).eval()
-                else:
-                    raise RuntimeError(f"Failed to patch Ling model: {e}")
-            else:
-                raise
+        # Load model
+        self.model = AutoModelForCausalLM.from_pretrained(
+            self.model_id,
+            dtype="auto",
+            device_map=self.config.device_map,
+            trust_remote_code=self.config.trust_remote_code,
+        ).eval()
         
         # Get device
         try:
@@ -190,10 +108,8 @@ class LingModel:
                 tokenize=False,
                 add_generation_prompt=True
             )
-            # Official docs use return_token_type_ids=False
             return self.tokenizer(text, return_tensors="pt", return_token_type_ids=False)["input_ids"]
         except Exception:
-            # Fallback: direct tokenization
             return self.tokenizer(prompt, return_tensors="pt")["input_ids"]
     
     @torch.inference_mode()
@@ -202,11 +118,7 @@ class LingModel:
         prompt: str,
         gen_config: GenerationConfig,
     ) -> tuple[str, list[int], float]:
-        """Standard autoregressive generation.
-        
-        Returns:
-            Tuple of (generated_text, token_ids, latency_seconds)
-        """
+        """Standard autoregressive generation."""
         import time
         
         input_ids = self.apply_chat_template(prompt).to(self.device)
@@ -214,17 +126,14 @@ class LingModel:
         
         t0 = time.time()
         
-        # Build generation kwargs
         gen_kwargs = {
             "max_new_tokens": self.max_new_tokens,
             "do_sample": self.do_sample,
         }
         
-        # Add temperature only if sampling
         if self.do_sample and self.temperature > 0:
             gen_kwargs["temperature"] = self.temperature
         
-        # Set pad token if needed
         if self.tokenizer.pad_token_id is not None:
             gen_kwargs["pad_token_id"] = self.tokenizer.pad_token_id
         elif self.tokenizer.eos_token_id is not None:
@@ -246,14 +155,7 @@ class LingModel:
         gen_config: GenerationConfig,
         trace_config,
     ):
-        """Generate with pseudo-trace for AR model.
-        
-        For autoregressive models, we create a "trace" showing sequential
-        token generation (position n generated at step n).
-        
-        Returns:
-            Tuple of (generated_text, token_ids, latency, trace)
-        """
+        """Generate with pseudo-trace for AR model."""
         import time
         from ..trace import GenerationTrace, TraceMeta, TraceStep
         
@@ -262,7 +164,6 @@ class LingModel:
         
         t0 = time.time()
         
-        # Build generation kwargs
         gen_kwargs = {
             "max_new_tokens": self.max_new_tokens,
             "do_sample": self.do_sample,
@@ -284,15 +185,13 @@ class LingModel:
         gen_text = self.tokenizer.decode(gen_ids, skip_special_tokens=True)
         gen_length = len(gen_ids)
         
-        # Create pseudo-trace for AR model
-        # Each step fixes exactly one position (sequential L-to-R)
         eos_id = self.tokenizer.eos_token_id if self.tokenizer.eos_token_id is not None else -1
         
         trace = GenerationTrace(
             meta=TraceMeta(
                 prompt_len=int(prompt_len),
                 gen_length=int(gen_length),
-                block_length=1,  # AR = block size 1
+                block_length=1,
                 steps=gen_length,
                 threshold=1.0,
                 mask_id=-1,
@@ -301,7 +200,6 @@ class LingModel:
         )
         
         for step in range(gen_length):
-            # In AR, positions 0..step are fixed at step
             fixed_map = [1 if i <= step else 0 for i in range(gen_length)]
             transfer_map = [1 if i == step else 0 for i in range(gen_length)]
             
