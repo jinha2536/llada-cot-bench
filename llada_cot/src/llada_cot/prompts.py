@@ -66,13 +66,13 @@ Question: {question}
 
 MATH_ANSWER_FORMAT = """
 
-Put your final answer in \\boxed{}."""
+Put your final answer in \\boxed{{}}."""
 
 MATH500_PROMPTS = {
     PromptMethod.DIRECT: """\
 Question: {question}
 
-Put your final answer in \\boxed{}.""",
+Put your final answer in \\boxed{{}}.""",
 
     PromptMethod.ZERO_COT: """\
 Question: {question}
@@ -99,7 +99,7 @@ If you use more operations in a step, the maximum allowed size for any operation
 
 Question: {question}
 
-\\boxed{answer}""",
+\\boxed{{answer}}""",
 }
 
 
