@@ -15,7 +15,27 @@ Benchmark Chain-of-Thought prompting strategies on **diffusion** (LLaDA) vs **au
 ```bash
 git clone https://github.com/YOUR_USERNAME/llada-cot-bench.git
 cd llada-cot-bench
+
+# Basic installation
+pip install -e .
+
+# With W&B support
 pip install -e ".[wandb]"
+
+# With better MATH grading (uses HuggingFace math-verify)
+pip install -e ".[math]"
+
+# Full installation (recommended)
+pip install -e ".[all]"
+```
+
+### Troubleshooting
+
+If you encounter `ImportError: cannot import name 'is_torch_fx_available'` when loading LLaDA:
+```bash
+# Clear HuggingFace cache and reinstall
+rm -rf ~/.cache/huggingface/modules/transformers_modules/inclusionAI
+pip install -e ".[all]"
 ```
 
 ## Quick Start
@@ -53,17 +73,24 @@ print(summary)
 ### Google Colab
 
 ```python
-# Cell 1: Install
+# Cell 1: Mount Drive (optional, for saving results)
+from google.colab import drive
+drive.mount('/content/drive')
+
+# Cell 2: Install
 !git clone https://github.com/YOUR_USERNAME/llada-cot-bench.git
 %cd llada-cot-bench
-!pip install -q -e .
+!pip install -q -e ".[wandb,math]"
 
-# Cell 2: Run
-!python scripts/colab_quickstart.py --dataset math --model llada --n-eval 50
+# Cell 3: W&B login (optional)
+import wandb
+wandb.login()
 
-# Or Python API
-from llada_cot import run_benchmark
-summary = run_benchmark(dataset="countdown", model="llada", n_eval=100)
+# Cell 4: Run Qwen3 (autoregressive baseline)
+!python scripts/colab_quickstart.py --model qwen3 --dataset math --save-to-drive --wandb --n-eval 40
+
+# Cell 5: Run LLaDA (diffusion model)
+!python scripts/colab_quickstart.py --model llada --dataset math --save-to-drive --wandb --n-eval 40
 ```
 
 ## Datasets

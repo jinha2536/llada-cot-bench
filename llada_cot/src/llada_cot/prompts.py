@@ -14,10 +14,11 @@ class PromptMethod(str, Enum):
 
 
 # =============================================================================
-# Math Word Problems (BigGSM, MATH)
+# BigGSM (Grade School Math - numeric answers)
+# Original paper prompts for arithmetic word problems
 # =============================================================================
 
-MATH_PROMPTS = {
+BIGGSM_PROMPTS = {
     PromptMethod.DIRECT: """\
 Question: {question}
 
@@ -26,101 +27,128 @@ Provide the final answer in the format: #### <number>.""",
     PromptMethod.ZERO_COT: """\
 Question: {question}
 
-Let's think step by step and solve this problem.
+Let's think step by step.
 
 Provide the final answer in the format: #### <number>.""",
 
     PromptMethod.COMPLEX_COT: """\
-Question: {question}
+You should think about the following question as thoroughly and in as much detail as possible.
 
-Let's think about this problem carefully. Think as thoroughly and in as much detail as possible. \
-Consider all relevant information and show your complete reasoning process.
+Question: {question}
 
 Provide the final answer in the format: #### <number>.""",
 
     PromptMethod.MARP: """\
+Reason step by step, but process operations in parallel.
+- At each step, you may perform multiple simple operations (up to 5).
+- Each operation must remain basic and not involve excessive complexity.
+- If you choose to perform more operations in a single step, then each operation must be correspondingly smaller in scope.
+
 Question: {question}
-
-Solve this problem using multi-step parallel reasoning:
-- At each step, you may perform up to 5 arithmetic operations simultaneously
-- Clearly show which operations can be computed in parallel
-- Use intermediate results for subsequent parallel steps
-
-Format your work as:
-Step 1: [parallel operations]
-Step 2: [parallel operations using results from Step 1]
-...
 
 Provide the final answer in the format: #### <number>.""",
 
     PromptMethod.DIFF_MARP: """\
+Reasoning in parallel. In each step, do as many basic operations as you can, up to 5.
+Any single operation cannot be too complex.
+If you use more operations in a step, the maximum allowed size for any operation decreases.
+
 Question: {question}
-
-Solve step by step with simple, parallel computations where possible:
-
-Step 1: [computations]
-Step 2: [computations]
-...
 
 #### <number>""",
 }
 
 
 # =============================================================================
+# MATH-500 (Competition Math - LaTeX answers)
+# Adapted prompts without arithmetic-specific constraints + \boxed{} format
+# =============================================================================
+
+MATH_ANSWER_FORMAT = """
+
+Put your final answer in \\boxed{}."""
+
+MATH500_PROMPTS = {
+    PromptMethod.DIRECT: """\
+Question: {question}
+
+Put your final answer in \\boxed{}.""",
+
+    PromptMethod.ZERO_COT: """\
+Question: {question}
+
+Let's think step by step.""" + MATH_ANSWER_FORMAT,
+
+    PromptMethod.COMPLEX_COT: """\
+You should think about the following question as thoroughly and in as much detail as possible.
+
+Question: {question}""" + MATH_ANSWER_FORMAT,
+
+    PromptMethod.MARP: """\
+Reason step by step, but process operations in parallel.
+- At each step, you may perform multiple simple operations.
+- Each operation must remain basic and not involve excessive complexity.
+- If you choose to perform more operations in a single step, then each operation must be correspondingly smaller in scope.
+
+Question: {question}""" + MATH_ANSWER_FORMAT,
+
+    PromptMethod.DIFF_MARP: """\
+Reasoning in parallel. In each step, do as many basic operations as you can.
+Any single operation cannot be too complex.
+If you use more operations in a step, the maximum allowed size for any operation decreases.
+
+Question: {question}
+
+\\boxed{answer}""",
+}
+
+
+# =============================================================================
 # Countdown Number Game
+# Same prompt structure as BigGSM/MATH for consistency
 # =============================================================================
 
 COUNTDOWN_PROMPTS = {
     PromptMethod.DIRECT: """\
 Using the numbers {numbers}, create an equation that equals {target}.
-You can use basic arithmetic operations (+, -, *, /) and each number can only be used once.
+You can use +, -, *, / and each number at most once.
 
 Provide the final answer in the format: #### <equation>""",
 
     PromptMethod.ZERO_COT: """\
 Using the numbers {numbers}, create an equation that equals {target}.
-You can use basic arithmetic operations (+, -, *, /) and each number can only be used once.
+You can use +, -, *, / and each number at most once.
 
-Let's think step by step and try different combinations.
+Let's think step by step.
 
 Provide the final answer in the format: #### <equation>""",
 
     PromptMethod.COMPLEX_COT: """\
+You should think about the following question as thoroughly and in as much detail as possible.
+
 Using the numbers {numbers}, create an equation that equals {target}.
-You can use basic arithmetic operations (+, -, *, /) and each number can only be used once.
-
-Let's systematically explore different combinations:
-1. First, consider what operations might get us close to {target}
-2. Try multiplying larger numbers first
-3. Consider division to create useful intermediate values
-4. Check if addition/subtraction can bridge remaining gaps
-
-Show your exploration process thoroughly.
+You can use +, -, *, / and each number at most once.
 
 Provide the final answer in the format: #### <equation>""",
 
     PromptMethod.MARP: """\
+Reason step by step, but process operations in parallel.
+- At each step, you may perform multiple simple operations (up to 5).
+- Each operation must remain basic and not involve excessive complexity.
+- If you choose to perform more operations in a single step, then each operation must be correspondingly smaller in scope.
+
 Using the numbers {numbers}, create an equation that equals {target}.
-You can use basic arithmetic operations (+, -, *, /) and each number can only be used once.
-
-Explore multiple paths in parallel:
-- Path A: Start with multiplication
-- Path B: Start with division  
-- Path C: Start with largest numbers
-- Path D: Factor {target} first
-
-For each path, show intermediate results. Select the path that reaches {target}.
+You can use +, -, *, / and each number at most once.
 
 Provide the final answer in the format: #### <equation>""",
 
     PromptMethod.DIFF_MARP: """\
-Using the numbers {numbers}, create an equation that equals {target}.
-Operations: +, -, *, /. Each number used once.
+Reasoning in parallel. In each step, do as many basic operations as you can, up to 5.
+Any single operation cannot be too complex.
+If you use more operations in a step, the maximum allowed size for any operation decreases.
 
-Try parallel combinations:
-A: [combination 1]
-B: [combination 2]
-C: [combination 3]
+Using the numbers {numbers}, create an equation that equals {target}.
+You can use +, -, *, / and each number at most once.
 
 #### <equation>""",
 }
@@ -163,9 +191,11 @@ def build_prompt(
             raise ValueError("Countdown requires 'numbers' and 'target' arguments")
         numbers_str = str(numbers) if isinstance(numbers, list) else numbers
         return templates[method].format(numbers=numbers_str, target=target)
+    elif dataset_type == DatasetType.MATH:
+        templates = MATH500_PROMPTS
+        return templates[method].format(question=question)
     else:
-        # BigGSM and MATH use the same prompts
-        templates = MATH_PROMPTS
+        templates = BIGGSM_PROMPTS
         return templates[method].format(question=question)
 
 

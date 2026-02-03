@@ -10,14 +10,17 @@ Usage in Colab:
     # Cell 2: Install
     !git clone https://github.com/YOUR_USERNAME/llada-cot-bench.git
     %cd llada-cot-bench
-    !pip install -q -e ".[wandb]"
+    !pip install -q -e ".[wandb,math]"
     
     # Cell 3: W&B login
     import wandb
     wandb.login()
     
-    # Cell 4: Run
-    !python scripts/colab_quickstart.py --save-to-drive --wandb
+    # Cell 4: Run Qwen3 (AR baseline)
+    !python scripts/colab_quickstart.py --model qwen3 --dataset math --save-to-drive --wandb
+    
+    # Cell 5: Run LLaDA (diffusion model)
+    !python scripts/colab_quickstart.py --model llada --dataset math --save-to-drive --wandb
 """
 import argparse
 import shutil

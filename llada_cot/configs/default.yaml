@@ -4,18 +4,18 @@ dataset:
   type: biggsm
   n_eval: 80
   seed: 42
-  math_levels: [3, 4, 5]
+  math_levels: [1, 2, 3, 4, 5]
   countdown_num_count: 4
 
 model:
   type: llada
   device_map: auto
   torch_dtype: auto
-  llada_model_id: "GSAI-ML/LLaDA-2.0-mini-CAP"
-  ling_model_id: "inclusionAI/Ling-lite-1.5"
+  llada_model_id: "inclusionAI/LLaDA2.0-mini"
+  qwen3_model_id: "Qwen/Qwen3-4B"
 
 generation:
-  gen_length: 512
+  gen_length: 1024
   block_length: 32
   steps: 64
   temperature: 0.0

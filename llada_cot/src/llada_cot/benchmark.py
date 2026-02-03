@@ -40,7 +40,7 @@ class Benchmark:
     
     Supports:
     - Datasets: BigGSM, MATH, Countdown
-    - Models: LLaDA (diffusion), Ling (autoregressive)
+    - Models: LLaDA (diffusion), Qwen3 (autoregressive)
     - Analysis: Reasoning patterns, trace visualization, W&B logging
     """
     
@@ -457,7 +457,7 @@ def run_benchmark(
     
     Args:
         dataset: Dataset name ("biggsm", "math", "countdown")
-        model: Model name ("llada", "ling")
+        model: Model name ("llada", "qwen3")
         n_eval: Number of examples to evaluate
         methods: List of methods to test
         output_dir: Output directory
