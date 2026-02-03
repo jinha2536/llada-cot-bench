@@ -1,50 +1,21 @@
-"""Ling autoregressive language model wrapper."""
+"""Ling autoregressive language model wrapper using vLLM.
+
+Ling-mini-2.0 requires vLLM with the bailing_moe_v2 patch applied.
+This wrapper handles the vLLM-based inference.
+"""
 import torch
 import numpy as np
-import os
-import sys
-import re
 
 from ..config import ModelConfig, GenerationConfig
 
 
-def _patch_transformers_for_ling():
-    """Patch transformers library for Ling model compatibility.
-    
-    Fixes two issues:
-    1. is_torch_fx_available was removed in newer transformers
-    2. ROPE_INIT_FUNCTIONS doesn't have 'default' key
-    """
-    # Fix 1: is_torch_fx_available
-    import transformers.utils.import_utils as import_utils
-    if not hasattr(import_utils, 'is_torch_fx_available'):
-        def is_torch_fx_available():
-            try:
-                import torch.fx
-                return True
-            except ImportError:
-                return False
-        import_utils.is_torch_fx_available = is_torch_fx_available
-    
-    # Fix 2: ROPE_INIT_FUNCTIONS missing 'default'
-    try:
-        from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS
-        if 'default' not in ROPE_INIT_FUNCTIONS:
-            # Use 'llama3' as default if available, otherwise first available
-            if 'llama3' in ROPE_INIT_FUNCTIONS:
-                ROPE_INIT_FUNCTIONS['default'] = ROPE_INIT_FUNCTIONS['llama3']
-            elif len(ROPE_INIT_FUNCTIONS) > 0:
-                ROPE_INIT_FUNCTIONS['default'] = list(ROPE_INIT_FUNCTIONS.values())[0]
-            print(f"Patched ROPE_INIT_FUNCTIONS with 'default' key")
-    except ImportError:
-        pass  # Older transformers version without modeling_rope_utils
-
-
 class LingModel:
-    """Ling autoregressive MoE model from InclusionAI.
+    """Ling autoregressive MoE model from InclusionAI via vLLM.
     
     This serves as an autoregressive baseline for comparison with LLaDA.
     Ling-mini-2.0: 16B total params, 1.4B active (same scale as LLaDA2.0-mini)
+    
+    Requires vLLM with bailing_moe_v2 patch. See setup instructions in README.
     """
     
     def __init__(self, config: ModelConfig):
@@ -53,7 +24,7 @@ class LingModel:
         self.max_new_tokens = config.ling_max_new_tokens
         self.temperature = config.ling_temperature
         self.do_sample = config.ling_do_sample
-        self.model = None
+        self.llm = None
         self.tokenizer = None
         self._device = None
     
@@ -66,89 +37,77 @@ class LingModel:
         return self._device
     
     def load(self) -> None:
-        """Load model and tokenizer."""
-        from transformers import AutoModelForCausalLM, AutoTokenizer
+        """Load model using vLLM."""
+        try:
+            from vllm import LLM, SamplingParams
+        except ImportError:
+            raise ImportError(
+                "vLLM is required for Ling model. Install with patched vLLM:\n"
+                "  git clone -b v0.10.0 https://github.com/vllm-project/vllm.git\n"
+                "  cd vllm\n"
+                "  wget https://raw.githubusercontent.com/inclusionAI/Ling-V2/refs/heads/main/inference/vllm/bailing_moe_v2.patch\n"
+                "  git apply bailing_moe_v2.patch\n"
+                "  pip install -e ."
+            )
         
-        # Patch transformers BEFORE loading
-        _patch_transformers_for_ling()
+        from transformers import AutoTokenizer
         
-        print(f"Loading {self.model_id}...")
+        print(f"Loading {self.model_id} via vLLM...")
         
-        # Load tokenizer
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            self.model_id,
-            trust_remote_code=self.config.trust_remote_code,
+        # Load tokenizer for chat template
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        
+        # Load model via vLLM
+        self.llm = LLM(
+            model=self.model_id,
+            dtype='bfloat16',
+            trust_remote_code=True,
+            gpu_memory_utilization=0.90,
         )
         
-        # Load model
-        self.model = AutoModelForCausalLM.from_pretrained(
-            self.model_id,
-            dtype="auto",
-            device_map=self.config.device_map,
-            trust_remote_code=self.config.trust_remote_code,
-        ).eval()
-        
-        # Get device
-        try:
-            self._device = next(self.model.parameters()).device
-        except StopIteration:
-            self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        
-        print(f"Loaded {self.name} on {self._device}")
+        self._device = torch.device("cuda:0")
+        print(f"Loaded {self.name} via vLLM on {self._device}")
     
-    def apply_chat_template(self, prompt: str) -> torch.Tensor:
-        """Apply Ling's chat template."""
+    def _format_prompt(self, prompt: str) -> str:
+        """Format prompt using chat template."""
         messages = [
             {"role": "system", "content": "You are Ling, an assistant created by inclusionAI"},
             {"role": "user", "content": prompt}
         ]
         try:
-            text = self.tokenizer.apply_chat_template(
+            return self.tokenizer.apply_chat_template(
                 messages,
                 tokenize=False,
                 add_generation_prompt=True
             )
-            return self.tokenizer(text, return_tensors="pt", return_token_type_ids=False)["input_ids"]
         except Exception:
-            return self.tokenizer(prompt, return_tensors="pt")["input_ids"]
+            return prompt
     
-    @torch.inference_mode()
     def generate(
         self,
         prompt: str,
         gen_config: GenerationConfig,
     ) -> tuple[str, list[int], float]:
-        """Standard autoregressive generation."""
+        """Generate using vLLM."""
         import time
+        from vllm import SamplingParams
         
-        input_ids = self.apply_chat_template(prompt).to(self.device)
-        prompt_len = input_ids.shape[1]
+        formatted_prompt = self._format_prompt(prompt)
+        
+        sampling_params = SamplingParams(
+            temperature=self.temperature if self.do_sample else 0.0,
+            max_tokens=self.max_new_tokens,
+        )
         
         t0 = time.time()
-        
-        gen_kwargs = {
-            "max_new_tokens": self.max_new_tokens,
-            "do_sample": self.do_sample,
-        }
-        
-        if self.do_sample and self.temperature > 0:
-            gen_kwargs["temperature"] = self.temperature
-        
-        if self.tokenizer.pad_token_id is not None:
-            gen_kwargs["pad_token_id"] = self.tokenizer.pad_token_id
-        elif self.tokenizer.eos_token_id is not None:
-            gen_kwargs["pad_token_id"] = self.tokenizer.eos_token_id
-        
-        output_ids = self.model.generate(input_ids, **gen_kwargs)
-        
+        outputs = self.llm.generate([formatted_prompt], sampling_params)
         latency = time.time() - t0
         
-        gen_ids = output_ids[0, prompt_len:].tolist()
-        gen_text = self.tokenizer.decode(gen_ids, skip_special_tokens=True)
+        gen_text = outputs[0].outputs[0].text
+        gen_ids = outputs[0].outputs[0].token_ids
         
-        return gen_text, gen_ids, latency
+        return gen_text, list(gen_ids), latency
     
-    @torch.inference_mode()
     def generate_with_trace(
         self,
         prompt: str,
@@ -159,32 +118,14 @@ class LingModel:
         import time
         from ..trace import GenerationTrace, TraceMeta, TraceStep
         
-        input_ids = self.apply_chat_template(prompt).to(self.device)
-        prompt_len = input_ids.shape[1]
+        formatted_prompt = self._format_prompt(prompt)
+        prompt_tokens = self.tokenizer.encode(formatted_prompt)
+        prompt_len = len(prompt_tokens)
         
-        t0 = time.time()
-        
-        gen_kwargs = {
-            "max_new_tokens": self.max_new_tokens,
-            "do_sample": self.do_sample,
-        }
-        
-        if self.do_sample and self.temperature > 0:
-            gen_kwargs["temperature"] = self.temperature
-        
-        if self.tokenizer.pad_token_id is not None:
-            gen_kwargs["pad_token_id"] = self.tokenizer.pad_token_id
-        elif self.tokenizer.eos_token_id is not None:
-            gen_kwargs["pad_token_id"] = self.tokenizer.eos_token_id
-        
-        output_ids = self.model.generate(input_ids, **gen_kwargs)
-        
-        latency = time.time() - t0
-        
-        gen_ids = output_ids[0, prompt_len:].tolist()
-        gen_text = self.tokenizer.decode(gen_ids, skip_special_tokens=True)
+        gen_text, gen_ids, latency = self.generate(prompt, gen_config)
         gen_length = len(gen_ids)
         
+        # Create pseudo-trace for AR model
         eos_id = self.tokenizer.eos_token_id if self.tokenizer.eos_token_id is not None else -1
         
         trace = GenerationTrace(
