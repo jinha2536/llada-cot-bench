@@ -1,9 +1,27 @@
 """Ling autoregressive language model wrapper."""
 import torch
 import numpy as np
-from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from ..config import ModelConfig, GenerationConfig
+
+
+def _patch_transformers_imports():
+    """Patch missing imports in transformers for Ling model compatibility.
+    
+    Ling's custom modeling code uses deprecated/removed transformers imports.
+    This adds them back for compatibility.
+    """
+    import transformers.utils.import_utils as import_utils
+    
+    # is_torch_fx_available was removed in newer transformers versions
+    if not hasattr(import_utils, 'is_torch_fx_available'):
+        def is_torch_fx_available():
+            try:
+                import torch.fx
+                return True
+            except ImportError:
+                return False
+        import_utils.is_torch_fx_available = is_torch_fx_available
 
 
 class LingModel:
@@ -33,6 +51,11 @@ class LingModel:
     
     def load(self) -> None:
         """Load model and tokenizer."""
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+        
+        # Apply compatibility patches before loading
+        _patch_transformers_imports()
+        
         print(f"Loading {self.model_id}...")
         
         # Load tokenizer first
@@ -47,22 +70,13 @@ class LingModel:
         else:
             dtype = getattr(torch, self.config.torch_dtype)
         
-        # Load model - Ling-mini-2.0 uses standard HF API
-        try:
-            self.model = AutoModelForCausalLM.from_pretrained(
-                self.model_id,
-                torch_dtype=dtype,
-                device_map=self.config.device_map,
-                trust_remote_code=self.config.trust_remote_code,
-            ).eval()
-        except TypeError:
-            # Some models use 'dtype' instead of 'torch_dtype'
-            self.model = AutoModelForCausalLM.from_pretrained(
-                self.model_id,
-                dtype=dtype,
-                device_map=self.config.device_map,
-                trust_remote_code=self.config.trust_remote_code,
-            ).eval()
+        # Load model - Ling uses 'dtype' not 'torch_dtype'
+        self.model = AutoModelForCausalLM.from_pretrained(
+            self.model_id,
+            dtype=dtype,  # Ling uses 'dtype'
+            device_map=self.config.device_map,
+            trust_remote_code=self.config.trust_remote_code,
+        ).eval()
         
         # Get device
         try:
