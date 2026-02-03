@@ -32,8 +32,8 @@ def main():
         "--math-levels",
         type=int,
         nargs="+",
-        default=[3, 4, 5],
-        help="MATH difficulty levels (default: 3 4 5)"
+        default=[1, 2, 3, 4, 5],
+        help="MATH difficulty levels (default: 1 2 3 4 5)"
     )
     
     # Countdown specific
@@ -49,7 +49,7 @@ def main():
         "--model", "-m",
         type=str,
         default="llada",
-        choices=["llada", "ling"],
+        choices=["llada", "qwen3"],
         help="Model to use (default: llada)"
     )
     

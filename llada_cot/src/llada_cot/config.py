@@ -13,7 +13,7 @@ class DatasetType(str, Enum):
 
 class ModelType(str, Enum):
     LLADA = "llada"
-    LING = "ling"
+    QWEN3 = "qwen3"
 
 
 @dataclass
@@ -22,8 +22,8 @@ class DatasetConfig:
     type: DatasetType = DatasetType.BIGGSM
     n_eval: int = 80
     seed: int = 42
-    # MATH specific
-    math_levels: List[int] = field(default_factory=lambda: [3, 4, 5])
+    # MATH specific - default to all levels for fair comparison
+    math_levels: List[int] = field(default_factory=lambda: [1, 2, 3, 4, 5])
     math_subjects: Optional[List[str]] = None  # None = all subjects
     # Countdown specific
     countdown_num_count: int = 4  # 3, 4, 5, 6 numbers
@@ -38,17 +38,17 @@ class ModelConfig:
     trust_remote_code: bool = True
     # LLaDA specific (16B MoE, 1.4B active)
     llada_model_id: str = "inclusionAI/LLaDA2.0-mini"
-    # Ling specific (16B MoE, 1.4B active - same scale as LLaDA2.0-mini)
-    ling_model_id: str = "inclusionAI/Ling-mini-2.0"
-    ling_max_new_tokens: int = 512
-    ling_temperature: float = 0.0
-    ling_do_sample: bool = False
+    # Qwen3 specific (AR baseline)
+    qwen3_model_id: str = "Qwen/Qwen3-4B"
+    qwen3_max_new_tokens: int = 1024
+    qwen3_temperature: float = 0.0
+    qwen3_do_sample: bool = False
 
 
 @dataclass
 class GenerationConfig:
     """Generation parameters (primarily for LLaDA)."""
-    gen_length: int = 512
+    gen_length: int = 1024
     block_length: int = 32
     steps: int = 64
     temperature: float = 0.0

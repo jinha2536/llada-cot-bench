@@ -31,9 +31,9 @@ def main():
     parser.add_argument("--dataset", "-d", type=str, default="biggsm",
                        choices=["biggsm", "math", "countdown"])
     parser.add_argument("--model", "-m", type=str, default="llada",
-                       choices=["llada", "ling"])
+                       choices=["llada", "qwen3"])
     parser.add_argument("--n-eval", "-n", type=int, default=80)
-    parser.add_argument("--math-levels", type=str, default="3,4,5")
+    parser.add_argument("--math-levels", type=str, default="1,2,3,4,5")
     parser.add_argument("--countdown-nums", type=int, default=4)
     parser.add_argument("--wandb", action="store_true")
     parser.add_argument("--wandb-project", type=str, default="llada-cot-bench")

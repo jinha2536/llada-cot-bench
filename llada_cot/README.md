@@ -1,11 +1,11 @@
 # LLaDA CoT Benchmark v0.3
 
-Benchmark Chain-of-Thought prompting strategies on **diffusion** (LLaDA) vs **autoregressive** (Ling) language models across multiple datasets.
+Benchmark Chain-of-Thought prompting strategies on **diffusion** (LLaDA) vs **autoregressive** (Qwen3) language models across multiple datasets.
 
 ## Features
 
-- **Multi-dataset**: BigGSM (easy), MATH (hard), Countdown (search-based)
-- **Multi-model**: LLaDA 2.0 (diffusion), Ling (autoregressive)
+- **Multi-dataset**: BigGSM (easy), MATH-500 (hard), Countdown (search-based)
+- **Multi-model**: LLaDA 2.0 (diffusion), Qwen3 (autoregressive)
 - **5 CoT methods**: Direct, Zero-CoT, Complex-CoT, MARP, Diff-MARP
 - **Trace analysis**: Visualize when answer tokens are fixed (diffusion models)
 - **W&B integration**: Comprehensive experiment tracking
@@ -26,14 +26,14 @@ pip install -e ".[wandb]"
 # BigGSM with LLaDA (default - easy, expect Direct to win)
 llada-bench --dataset biggsm --model llada --n-eval 80
 
-# MATH Level 4-5 with LLaDA (hard - CoT should help)
-llada-bench --dataset math --model llada --n-eval 100 --math-levels 4 5
+# MATH-500 with LLaDA (all levels)
+llada-bench --dataset math --model llada --n-eval 100
 
 # Countdown with LLaDA (search-based - diffusion advantage?)
 llada-bench --dataset countdown --model llada --n-eval 100 --countdown-nums 4
 
-# Compare with Ling (autoregressive baseline)
-llada-bench --dataset math --model ling --n-eval 100 --math-levels 4 5
+# Compare with Qwen3 (autoregressive baseline)
+llada-bench --dataset math --model qwen3 --n-eval 100
 ```
 
 ### Python API
@@ -43,10 +43,9 @@ from llada_cot import run_benchmark
 
 summary = run_benchmark(
     dataset="math",      # "biggsm", "math", "countdown"
-    model="llada",       # "llada", "ling"
+    model="llada",       # "llada", "qwen3"
     n_eval=100,
     methods=["Direct", "Zero-CoT", "MARP"],
-    math_levels=[4, 5],  # MATH specific
 )
 print(summary)
 ```
@@ -104,8 +103,8 @@ MARP ≈ Diff-MARP > Zero-CoT > Direct
 | Hypothesis | How to Test |
 |------------|-------------|
 | Diffusion has length penalty | Compare Direct accuracy: should be similar across models |
-| Parallel prompts help diffusion | MARP gap: (MARP - Zero-CoT) larger for LLaDA than Ling |
-| Diffusion better at search | Countdown: LLaDA with MARP > Ling with MARP |
+| Parallel prompts help diffusion | MARP gap: (MARP - Zero-CoT) larger for LLaDA than Qwen3 |
+| Diffusion better at search | Countdown: LLaDA with MARP > Qwen3 with MARP |
 
 ## Output Files
 
@@ -153,7 +152,7 @@ src/llada_cot/
 │   └── countdown.py
 ├── models/            # Model wrappers
 │   ├── llada.py       # LLaDA with trace support
-│   └── ling.py        # Ling (AR baseline)
+│   └── qwen3.py       # Qwen3 (AR baseline)
 ├── trace.py           # Diffusion trace analysis
 ├── analysis.py        # Reasoning analysis
 ├── evaluation.py      # Answer extraction & comparison

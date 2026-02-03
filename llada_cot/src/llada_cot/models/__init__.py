@@ -15,9 +15,9 @@ def create_model(config: ModelConfig):
         from .llada import LLaDAModel
         return LLaDAModel(config)
     
-    elif config.type == ModelType.LING:
-        from .ling import LingModel
-        return LingModel(config)
+    elif config.type == ModelType.QWEN3:
+        from .qwen3 import Qwen3Model
+        return Qwen3Model(config)
     
     else:
         raise ValueError(f"Unknown model type: {config.type}")
