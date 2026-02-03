@@ -10,7 +10,7 @@ class LingModel:
     """Ling autoregressive MoE model from InclusionAI.
     
     This serves as an autoregressive baseline for comparison with LLaDA.
-    Both are MoE models with similar parameter counts (~16B total, ~1.4B active).
+    Ling-mini-2.0: 16B total params, 1.4B active (same scale as LLaDA2.0-mini)
     """
     
     def __init__(self, config: ModelConfig):
@@ -35,25 +35,41 @@ class LingModel:
         """Load model and tokenizer."""
         print(f"Loading {self.model_id}...")
         
+        # Load tokenizer first
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            self.model_id,
+            trust_remote_code=self.config.trust_remote_code,
+        )
+        
         # Determine dtype
         if self.config.torch_dtype == "auto":
             dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
         else:
             dtype = getattr(torch, self.config.torch_dtype)
         
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            self.model_id,
-            trust_remote_code=self.config.trust_remote_code,
-        )
+        # Load model - Ling-mini-2.0 uses standard HF API
+        try:
+            self.model = AutoModelForCausalLM.from_pretrained(
+                self.model_id,
+                torch_dtype=dtype,
+                device_map=self.config.device_map,
+                trust_remote_code=self.config.trust_remote_code,
+            ).eval()
+        except TypeError:
+            # Some models use 'dtype' instead of 'torch_dtype'
+            self.model = AutoModelForCausalLM.from_pretrained(
+                self.model_id,
+                dtype=dtype,
+                device_map=self.config.device_map,
+                trust_remote_code=self.config.trust_remote_code,
+            ).eval()
         
-        self.model = AutoModelForCausalLM.from_pretrained(
-            self.model_id,
-            torch_dtype=dtype,
-            device_map=self.config.device_map,
-            trust_remote_code=self.config.trust_remote_code,
-        ).eval()
+        # Get device
+        try:
+            self._device = next(self.model.parameters()).device
+        except StopIteration:
+            self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-        self._device = next(self.model.parameters()).device
         print(f"Loaded {self.name} on {self._device}, dtype={dtype}")
     
     def apply_chat_template(self, prompt: str) -> torch.Tensor:
@@ -70,6 +86,7 @@ class LingModel:
             )
             return self.tokenizer(text, return_tensors="pt")["input_ids"]
         except Exception:
+            # Fallback: direct tokenization
             return self.tokenizer(prompt, return_tensors="pt")["input_ids"]
     
     @torch.inference_mode()
@@ -90,13 +107,23 @@ class LingModel:
         
         t0 = time.time()
         
-        output_ids = self.model.generate(
-            input_ids,
-            max_new_tokens=self.max_new_tokens,
-            temperature=self.temperature if self.do_sample else None,
-            do_sample=self.do_sample,
-            pad_token_id=self.tokenizer.eos_token_id,
-        )
+        # Build generation kwargs
+        gen_kwargs = {
+            "max_new_tokens": self.max_new_tokens,
+            "do_sample": self.do_sample,
+        }
+        
+        # Add temperature only if sampling
+        if self.do_sample and self.temperature > 0:
+            gen_kwargs["temperature"] = self.temperature
+        
+        # Set pad token if needed
+        if self.tokenizer.pad_token_id is not None:
+            gen_kwargs["pad_token_id"] = self.tokenizer.pad_token_id
+        elif self.tokenizer.eos_token_id is not None:
+            gen_kwargs["pad_token_id"] = self.tokenizer.eos_token_id
+        
+        output_ids = self.model.generate(input_ids, **gen_kwargs)
         
         latency = time.time() - t0
         
@@ -128,13 +155,21 @@ class LingModel:
         
         t0 = time.time()
         
-        output_ids = self.model.generate(
-            input_ids,
-            max_new_tokens=self.max_new_tokens,
-            temperature=self.temperature if self.do_sample else None,
-            do_sample=self.do_sample,
-            pad_token_id=self.tokenizer.eos_token_id,
-        )
+        # Build generation kwargs
+        gen_kwargs = {
+            "max_new_tokens": self.max_new_tokens,
+            "do_sample": self.do_sample,
+        }
+        
+        if self.do_sample and self.temperature > 0:
+            gen_kwargs["temperature"] = self.temperature
+        
+        if self.tokenizer.pad_token_id is not None:
+            gen_kwargs["pad_token_id"] = self.tokenizer.pad_token_id
+        elif self.tokenizer.eos_token_id is not None:
+            gen_kwargs["pad_token_id"] = self.tokenizer.eos_token_id
+        
+        output_ids = self.model.generate(input_ids, **gen_kwargs)
         
         latency = time.time() - t0
         
@@ -143,7 +178,9 @@ class LingModel:
         gen_length = len(gen_ids)
         
         # Create pseudo-trace for AR model
-        # Each step fixes exactly one position (sequential)
+        # Each step fixes exactly one position (sequential L-to-R)
+        eos_id = self.tokenizer.eos_token_id if self.tokenizer.eos_token_id is not None else -1
+        
         trace = GenerationTrace(
             meta=TraceMeta(
                 prompt_len=int(prompt_len),
@@ -152,7 +189,7 @@ class LingModel:
                 steps=gen_length,
                 threshold=1.0,
                 mask_id=-1,
-                eos_id=self.tokenizer.eos_token_id or -1,
+                eos_id=eos_id,
             )
         )
         
@@ -167,7 +204,7 @@ class LingModel:
                 step_in_block=0,
                 fixed_map=fixed_map,
                 transfer_map=transfer_map,
-                parsed_answer=None,  # Will be filled by analysis
+                parsed_answer=None,
             ))
         
         return gen_text, gen_ids, latency, trace
