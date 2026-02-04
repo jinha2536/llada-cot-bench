@@ -25,7 +25,7 @@ classifiers = [
 
 dependencies = [
     "torch>=2.0",
-    "transformers>=4.35",
+    "transformers>=4.35,<4.45",  # LLaDA requires <4.45 (ROPE API change)
     "datasets>=2.14",
     "pandas>=2.0",
     "numpy>=1.24",
