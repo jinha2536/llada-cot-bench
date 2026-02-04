@@ -37,7 +37,7 @@ class ModelConfig:
     torch_dtype: str = "auto"
     trust_remote_code: bool = True
     # LLaDA specific (16B MoE, 1.4B active)
-    llada_model_id: str = "inclusionAI/LLaDA2.0-mini"
+    llada_model_id: str = "inclusionAI/LLaDA2.0-mini-CAP"
     # Qwen3 specific (AR baseline)
     qwen3_model_id: str = "Qwen/Qwen3-4B"
     qwen3_max_new_tokens: int = 1024

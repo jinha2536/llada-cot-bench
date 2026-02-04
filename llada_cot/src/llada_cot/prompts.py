@@ -105,31 +105,28 @@ Question: {question}
 
 # =============================================================================
 # Countdown Number Game
-# Same prompt structure as BigGSM/MATH for consistency
+# Task: Combine given numbers using +, -, *, / to reach target (each number once)
 # =============================================================================
 
 COUNTDOWN_PROMPTS = {
     PromptMethod.DIRECT: """\
-Using the numbers {numbers}, create an equation that equals {target}.
-You can use +, -, *, / and each number at most once.
+Question: Using the numbers {numbers}, create an expression that equals {target}. Each number can be used at most once. Use +, -, *, / only.
 
-Provide the final answer in the format: #### <equation>""",
+Provide the final answer in the format: #### <expression>""",
 
     PromptMethod.ZERO_COT: """\
-Using the numbers {numbers}, create an equation that equals {target}.
-You can use +, -, *, / and each number at most once.
+Question: Using the numbers {numbers}, create an expression that equals {target}. Each number can be used at most once. Use +, -, *, / only.
 
 Let's think step by step.
 
-Provide the final answer in the format: #### <equation>""",
+Provide the final answer in the format: #### <expression>""",
 
     PromptMethod.COMPLEX_COT: """\
 You should think about the following question as thoroughly and in as much detail as possible.
 
-Using the numbers {numbers}, create an equation that equals {target}.
-You can use +, -, *, / and each number at most once.
+Question: Using the numbers {numbers}, create an expression that equals {target}. Each number can be used at most once. Use +, -, *, / only.
 
-Provide the final answer in the format: #### <equation>""",
+Provide the final answer in the format: #### <expression>""",
 
     PromptMethod.MARP: """\
 Reason step by step, but process operations in parallel.
@@ -137,20 +134,18 @@ Reason step by step, but process operations in parallel.
 - Each operation must remain basic and not involve excessive complexity.
 - If you choose to perform more operations in a single step, then each operation must be correspondingly smaller in scope.
 
-Using the numbers {numbers}, create an equation that equals {target}.
-You can use +, -, *, / and each number at most once.
+Question: Using the numbers {numbers}, create an expression that equals {target}. Each number can be used at most once. Use +, -, *, / only.
 
-Provide the final answer in the format: #### <equation>""",
+Provide the final answer in the format: #### <expression>""",
 
     PromptMethod.DIFF_MARP: """\
 Reasoning in parallel. In each step, do as many basic operations as you can, up to 5.
 Any single operation cannot be too complex.
 If you use more operations in a step, the maximum allowed size for any operation decreases.
 
-Using the numbers {numbers}, create an equation that equals {target}.
-You can use +, -, *, / and each number at most once.
+Question: Using the numbers {numbers}, create an expression that equals {target}. Each number can be used at most once. Use +, -, *, / only.
 
-#### <equation>""",
+#### <expression>""",
 }
 
 

@@ -271,40 +271,62 @@ def extract_number(s: str) -> Optional[float]:
 def extract_countdown_answer(text: str | None) -> str | None:
     """Extract equation from Countdown answer.
     
-    Looks for #### pattern or <answer> tags.
+    Priority:
+    1. #### pattern (most reliable)
+    2. <answer> tags
+    3. "answer is" pattern (last occurrence)
+    4. Last equation-like pattern (fallback)
     """
     if text is None:
         return None
     
-    # Try #### format
+    # 1. Try #### format (most reliable - explicitly marked answer)
     match = re.search(r"####\s*([^\n]+)", text)
     if match:
-        return _clean_equation(match.group(1))
+        return _clean_countdown_equation(match.group(1))
     
-    # Try <answer> tags (TinyZero format)
+    # 2. Try <answer> tags (TinyZero format)
     match = re.search(r"<answer>\s*([^<]+)\s*</answer>", text)
     if match:
-        return _clean_equation(match.group(1))
+        return _clean_countdown_equation(match.group(1))
     
-    # Try "answer is" format
-    match = re.search(r"(?:answer|equation|result)\s*(?:is|:)\s*([^\n]+)", 
-                     text, re.IGNORECASE)
-    if match:
-        return _clean_equation(match.group(1))
+    # 3. Try "answer is" format - use LAST occurrence to avoid intermediate steps
+    matches = list(re.finditer(
+        r"(?:final\s+)?(?:answer|equation|result)\s*(?:is|:)\s*:?\s*([^\n]+)", 
+        text, re.IGNORECASE
+    ))
+    if matches:
+        return _clean_countdown_equation(matches[-1].group(1))
     
-    # Last resort: find equation-like pattern
-    match = re.search(r"(\d+\s*[\+\-\*/\(\)]\s*[\d\+\-\*/\(\)\s]+)", text)
-    if match:
-        return _clean_equation(match.group(1))
+    # 4. Last resort: find the LAST equation-like pattern
+    # This helps avoid picking up intermediate calculations
+    equation_pattern = r"(\(?\d+\s*[\+\-\*/]\s*[\d\+\-\*/\(\)\s]+\)?)"
+    matches = list(re.finditer(equation_pattern, text))
+    if matches:
+        return _clean_countdown_equation(matches[-1].group(1))
     
     return None
 
 
-def _clean_equation(eq: str) -> str:
-    """Clean up equation string."""
-    eq = re.sub(r"[<>\[\]]", "", eq)
-    eq = eq.replace("=", "").strip()
-    eq = re.sub(r"\s*=?\s*\d+\s*$", "", eq)
+def _clean_countdown_equation(eq: str) -> str:
+    """Clean up Countdown equation string.
+    
+    Removes:
+    - Brackets [ ]
+    - Trailing "= number" patterns
+    - Extra whitespace
+    """
+    eq = eq.strip()
+    
+    # Remove brackets (sometimes model outputs [expression])
+    eq = re.sub(r"[\[\]]", "", eq)
+    
+    # Remove trailing "= result" (e.g., "44 + 19 + 35 = 98" -> "44 + 19 + 35")
+    eq = re.sub(r"\s*=\s*\d+\.?\d*\s*$", "", eq)
+    
+    # Remove any text after the equation (e.g., "44+19+35 which equals 98")
+    eq = re.sub(r"\s+(?:which|that|equals|is).*$", "", eq, flags=re.IGNORECASE)
+    
     return eq.strip()
 
 
@@ -336,57 +358,48 @@ def is_correct_countdown(
     target: int, 
     available_numbers: List[int]
 ) -> bool:
-    """Check if Countdown equation is correct.
+    """Check if Countdown equation is correct (ToT standard scoring).
     
     Verifies:
     1. Equation evaluates to target
-    2. Only uses available numbers (each at most once)
+    2. Uses ALL available numbers exactly once (no more, no less)
+    3. Only uses +, -, *, / operators
     """
     if equation is None:
         return False
     
     try:
-        # Evaluate the equation
-        result = _safe_eval(equation)
-        if result is None:
+        # Clean equation
+        equation = equation.strip()
+        
+        # Only allow digits, operators, parentheses, and spaces
+        if not re.match(r'^[\d\+\-\*/\(\)\.\s]+$', equation):
             return False
+        
+        # Use sympy for accurate calculation (avoids float precision issues)
+        try:
+            import sympy
+            result = sympy.sympify(equation)
+        except ImportError:
+            # Fallback to eval if sympy not available
+            result = eval(equation, {"__builtins__": {}}, {})
         
         # Check if result equals target
-        if abs(result - target) > 1e-6:
+        if abs(float(result) - target) > 1e-6:
             return False
         
-        # Check number usage
-        used_numbers = _extract_numbers(equation)
-        available = available_numbers.copy()
-        for num in used_numbers:
-            if num in available:
-                available.remove(num)
-            else:
-                return False  # Used unavailable number or used twice
+        # Extract numbers used in equation
+        used_numbers = [int(n) for n in re.findall(r'\d+', equation)]
+        
+        # ToT standard: ALL numbers must be used exactly once
+        # Compare sorted lists to check exact match
+        if sorted(used_numbers) != sorted(available_numbers):
+            return False
         
         return True
         
     except Exception:
         return False
-
-
-def _safe_eval(equation: str) -> Optional[float]:
-    """Safely evaluate a math equation."""
-    # Only allow digits, operators, parentheses, and spaces
-    if not re.match(r'^[\d\+\-\*/\(\)\.\s]+$', equation):
-        return None
-    
-    try:
-        result = eval(equation, {"__builtins__": {}}, {})
-        return float(result)
-    except:
-        return None
-
-
-def _extract_numbers(equation: str) -> List[int]:
-    """Extract all numbers used in an equation."""
-    numbers = re.findall(r'\d+', equation)
-    return [int(n) for n in numbers]
 
 
 def compute_metrics(results: list[dict]) -> dict[str, float]:
